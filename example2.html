@@ -495,53 +495,65 @@
                }
            });
 
-           // Scrolling spectrogram — shift left, draw new column on right
+           // Scrolling spectrogram — advance 1 column every ~33ms (30 columns/sec)
            const dataArray = new Uint8Array(freqBinCount);
            const specState = { analyser, dataArray, baseline: null };
            spectrograms.push(specState);
 
-           function draw() {
+           const msPerColumn = 33;
+           let lastColumnTime = performance.now();
+
+           function draw(now) {
                animId = requestAnimationFrame(draw);
+
+               // Only advance columns at a fixed rate
+               const elapsed = now - lastColumnTime;
+               if (elapsed < msPerColumn) return;
+
+               // Catch up missed columns (cap at 3 to avoid freeze-burst)
+               const columns = Math.min(Math.floor(elapsed / msPerColumn), 3);
+               lastColumnTime += columns * msPerColumn;
+
                analyser.getByteFrequencyData(dataArray);
 
                const w = canvas.width;
                const h = canvas.height;
 
-               // Shift existing image left by 1px
-               const imageData = ctx.getImageData(1, 0, w - 1, h);
+               // Shift existing image left by the number of columns
+               const imageData = ctx.getImageData(columns, 0, w - columns, h);
                ctx.putImageData(imageData, 0, 0);
 
-               // Draw new column on the right edge
-               for (let y = 0; y < h; y++) {
-                   // Top = high freq, bottom = low freq
-                   const freqIndex = Math.floor((1 - y / h) * freqBinCount);
-                   let value = dataArray[freqIndex] || 0;
+               // Draw new columns on the right edge
+               for (let col = 0; col < columns; col++) {
+                   const x = w - columns + col;
+                   for (let y = 0; y < h; y++) {
+                       const freqIndex = Math.floor((1 - y / h) * freqBinCount);
+                       let value = dataArray[freqIndex] || 0;
 
-                   // Subtract baseline if set
-                   if (specState.baseline) {
-                       value = Math.max(0, value - specState.baseline[freqIndex]);
+                       if (specState.baseline) {
+                           value = Math.max(0, value - specState.baseline[freqIndex]);
+                       }
+
+                       const norm = value / 255;
+
+                       let r, g, b;
+                       if (norm < 0.25) {
+                           r = 0; g = 0; b = Math.floor(norm * 4 * 255);
+                       } else if (norm < 0.5) {
+                           r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
+                       } else if (norm < 0.75) {
+                           r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
+                       } else {
+                           r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
+                       }
+
+                       ctx.fillStyle = `rgb(${r},${g},${b})`;
+                       ctx.fillRect(x, y, 1, 1);
                    }
-
-                   const norm = value / 255;
-
-                   // Black -> blue -> cyan -> yellow -> white
-                   let r, g, b;
-                   if (norm < 0.25) {
-                       r = 0; g = 0; b = Math.floor(norm * 4 * 255);
-                   } else if (norm < 0.5) {
-                       r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
-                   } else if (norm < 0.75) {
-                       r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
-                   } else {
-                       r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
-                   }
-
-                   ctx.fillStyle = `rgb(${r},${g},${b})`;
-                   ctx.fillRect(w - 1, y, 1, 1);
                }
            }
 
-           draw();
+           animId = requestAnimationFrame(draw);
            videoCount++;
        }
 
