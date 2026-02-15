@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Mixer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        #controls {
+            padding: 12px 16px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        button {
+            padding: 7px 14px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #1a4a8a;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: inherit;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        button:hover {
+            background: #1a4a8a;
+            border-color: #2a6ad0;
+        }
+
+        .btn-accent {
+            background: #1b8a5a;
+            border-color: #24b474;
+        }
+
+        .btn-accent:hover {
+            background: #24b474;
+            border-color: #2ed88e;
+        }
+
+        .separator {
+            width: 1px;
+            height: 28px;
+            background: #0f3460;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            background: #0f3460;
+            padding: 5px 10px;
+            border-radius: 6px;
+            border: 1px solid #1a4a8a;
+        }
+
+        .control-group label {
+            font-size: 12px;
+            color: #8899aa;
+            white-space: nowrap;
+        }
+
+        .control-group input,
+        .control-group select {
+            background: #16213e;
+            color: #e0e0e0;
+            border: 1px solid #1a4a8a;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-size: 12px;
+            font-family: inherit;
+        }
+
+        .control-group input { width: 60px; }
+        .control-group select { max-width: 200px; }
+
+        #canvas-container {
+            position: relative;
+            background: #000;
+            overflow: hidden;
+            border-radius: 4px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+            transform-origin: top left;
+        }
+
+        .video-wrapper {
+            position: absolute;
+            border: 2px solid transparent;
+            cursor: move;
+            overflow: visible;
+            border-radius: 0;
+            transform-origin: center center;
+        }
+
+        .video-wrapper.selected {
+            border-color: #ff0000;
+            border-style: dashed;
+        }
+
+        .video-wrapper video,
+        .video-wrapper canvas {
+            position: absolute;
+            pointer-events: none;
+            transform-origin: top left;
+        }
+
+        /* Clip inner content to wrapper bounds */
+        .video-wrapper .inner-clip {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        /* Handles — only visible when selected */
+        .handle {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #fff;
+            border: 1px solid #f00;
+            z-index: 20;
+            display: none;
+        }
+
+        .video-wrapper.selected .handle {
+            display: block;
+        }
+
+        .handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
+        .handle-n  { top: -5px; left: 50%; margin-left: -5px; cursor: n-resize; }
+        .handle-ne { top: -5px; right: -5px; cursor: ne-resize; }
+        .handle-e  { top: 50%; margin-top: -5px; right: -5px; cursor: e-resize; }
+        .handle-se { bottom: -5px; right: -5px; cursor: se-resize; }
+        .handle-s  { bottom: -5px; left: 50%; margin-left: -5px; cursor: s-resize; }
+        .handle-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+        .handle-w  { top: 50%; margin-top: -5px; left: -5px; cursor: w-resize; }
+
+        .handle-rotate {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #fff;
+            border: 2px solid #f00;
+            border-radius: 50%;
+            top: -37px;
+            left: 50%;
+            margin-left: -7px;
+            cursor: grab;
+            z-index: 20;
+            display: none;
+        }
+
+        .video-wrapper.selected .handle-rotate {
+            display: block;
+        }
+
+        .handle-line {
+            position: absolute;
+            width: 2px;
+            height: 30px;
+            background: #f00;
+            top: -30px;
+            left: 50%;
+            margin-left: -1px;
+            z-index: 19;
+            display: none;
+            pointer-events: none;
+        }
+
+        .video-wrapper.selected .handle-line {
+            display: block;
+        }
+
+        /* Fullscreen */
+        :fullscreen,
+        :-webkit-full-screen {
+            background: #000;
+        }
+
+        :fullscreen #controls,
+        :-webkit-full-screen #controls {
+            display: none;
+        }
+
+        :fullscreen #canvas-container,
+        :-webkit-full-screen #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            margin: 0;
+            border-radius: 0;
+            box-shadow: none;
+        }
+
+        :fullscreen .video-wrapper,
+        :-webkit-full-screen .video-wrapper {
+            border: none !important;
+        }
+
+        :fullscreen .handle,
+        :fullscreen .handle-rotate,
+        :fullscreen .handle-line,
+        :-webkit-full-screen .handle,
+        :-webkit-full-screen .handle-rotate,
+        :-webkit-full-screen .handle-line {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button class="btn-accent" onclick="startCam1()">Webcam 1</button>
+        <button class="btn-accent" onclick="startCam2()">Webcam 2</button>
+        <div class="separator"></div>
+        <button onclick="addSpectrogram()">Spectrogram</button>
+        <button onclick="zeroSpectrogram()">Zero</button>
+        <button onclick="resetSpectrogram()">Reset</button>
+        <div class="separator"></div>
+        <button onclick="duplicateSelected()">Duplicate</button>
+        <button onclick="document.documentElement.requestFullscreen()">Fullscreen</button>
+
+        <div class="control-group">
+            <label>Audio:</label>
+            <select id="audioSelect" onchange="updateAudioDevice()"></select>
+        </div>
+
+        <div class="control-group" id="video-controls" style="display: none;">
+            <label>Pan X:</label>
+            <input type="number" id="panX" value="0" onchange="updateVideoTransform()">
+            <label>Y:</label>
+            <input type="number" id="panY" value="0" onchange="updateVideoTransform()">
+            <label>Zoom:</label>
+            <input type="number" id="zoom" value="100" step="10" min="10" max="500" onchange="updateVideoTransform()">%
+            <label>Rot:</label>
+            <input type="number" id="rotation" value="0" step="90" onchange="updateVideoTransform()">&deg;
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const container = document.getElementById('canvas-container');
+        const videoControls = document.getElementById('video-controls');
+        const controlsEl = document.getElementById('controls');
+        const streams = {};
+        let selected = null;
+        let videoCount = 0;
+        let selectedAudioDeviceId = null;
+        let spectrograms = [];
+
+        // Canvas matches screen resolution so fullscreen is pixel-perfect
+        const CANVAS_W = screen.width;
+        const CANVAS_H = screen.height;
+        container.style.width = CANVAS_W + 'px';
+        container.style.height = CANVAS_H + 'px';
+
+        // --- Audio device management ---
+
+        async function populateAudioDevices() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const audioDevices = devices.filter(d => d.kind === 'audioinput');
+            const audioSelect = document.getElementById('audioSelect');
+            audioSelect.innerHTML = '<option value="">Default</option>';
+            audioDevices.forEach((device, i) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.textContent = device.label || `Microphone ${i + 1}`;
+                audioSelect.appendChild(option);
+            });
+        }
+
+        function updateAudioDevice() {
+            selectedAudioDeviceId = document.getElementById('audioSelect').value || null;
+        }
+
+        document.addEventListener('click', () => populateAudioDevices(), { once: true });
+
+        // --- Container scaling ---
+
+        function updateContainerScale() {
+            if (document.fullscreenElement) {
+                const scale = Math.min(window.innerWidth / CANVAS_W, window.innerHeight / CANVAS_H);
+                const offsetX = (window.innerWidth - CANVAS_W * scale) / 2;
+                const offsetY = (window.innerHeight - CANVAS_H * scale) / 2;
+                container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+                container.style.margin = '0';
+            } else {
+                const controlsH = controlsEl.offsetHeight;
+                const availW = window.innerWidth - 32;
+                const availH = window.innerHeight - controlsH - 32;
+                const scale = Math.min(availW / CANVAS_W, availH / CANVAS_H, 1);
+                const offsetX = (window.innerWidth - CANVAS_W * scale) / 2;
+                const offsetY = controlsH + (availH - CANVAS_H * scale) / 2 + 8;
+                container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+                container.style.margin = '0';
+            }
+        }
+
+        updateContainerScale();
+        document.addEventListener('fullscreenchange', updateContainerScale);
+        window.addEventListener('resize', updateContainerScale);
+
+        // --- Keyboard shortcuts ---
+
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            if ((e.key === 'r' || e.key === 'R') && selected) {
+                e.preventDefault();
+                rotateSelected();
+            }
+            if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+                e.preventDefault();
+                deleteSelected();
+            }
+        });
+
+        // --- Handle creation ---
+
+        function createHandles(wrapper) {
+            const handleIds = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+            handleIds.forEach(id => {
+                const h = document.createElement('div');
+                h.className = `handle handle-${id}`;
+                h.dataset.handle = id;
+                h.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startHandleResize(wrapper, id, e);
+                });
+                wrapper.appendChild(h);
+            });
+
+            // Rotation line
+            const line = document.createElement('div');
+            line.className = 'handle-line';
+            wrapper.appendChild(line);
+
+            // Rotation handle
+            const rotHandle = document.createElement('div');
+            rotHandle.className = 'handle-rotate';
+            rotHandle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                startHandleRotate(wrapper, e);
+            });
+            wrapper.appendChild(rotHandle);
+        }
+
+        // --- Wrapper position from center ---
+
+        function updateWrapperPosition(wrapper) {
+            const cx = parseFloat(wrapper.dataset.cx);
+            const cy = parseFloat(wrapper.dataset.cy);
+            const w = wrapper.offsetWidth;
+            const h = wrapper.offsetHeight;
+            wrapper.style.left = (cx - w / 2) + 'px';
+            wrapper.style.top = (cy - h / 2) + 'px';
+
+            const rotation = parseFloat(wrapper.dataset.rotation) || 0;
+            wrapper.style.transform = `rotate(${rotation}deg)`;
+        }
+
+        // --- Resize with rotation ---
+
+        function startHandleResize(wrapper, handleId, e) {
+            const startMouseX = e.clientX;
+            const startMouseY = e.clientY;
+            const startW = wrapper.offsetWidth;
+            const startH = wrapper.offsetHeight;
+            const startCX = parseFloat(wrapper.dataset.cx);
+            const startCY = parseFloat(wrapper.dataset.cy);
+            const rotation = parseFloat(wrapper.dataset.rotation) || 0;
+            const rad = rotation * Math.PI / 180;
+            const aspect = startW / startH;
+
+            // Get the container's transform to convert screen deltas to canvas deltas
+            const containerRect = container.getBoundingClientRect();
+            const containerScale = containerRect.width / CANVAS_W;
+
+            const isCorner = ['nw', 'ne', 'sw', 'se'].includes(handleId);
+
+            const onMove = (e) => {
+                // Convert screen-space mouse delta to canvas-space
+                const rawDX = (e.clientX - startMouseX) / containerScale;
+                const rawDY = (e.clientY - startMouseY) / containerScale;
+
+                // Project into wrapper's local coordinate system
+                const localDX = rawDX * Math.cos(rad) + rawDY * Math.sin(rad);
+                const localDY = -rawDX * Math.sin(rad) + rawDY * Math.cos(rad);
+
+                let newW = startW;
+                let newH = startH;
+                // How much the center shifts in local space
+                let shiftX = 0;
+                let shiftY = 0;
+
+                // Determine which axes change and in which direction
+                if (handleId.includes('e')) {
+                    newW = Math.max(30, startW + localDX);
+                    shiftX = (newW - startW) / 2;
+                }
+                if (handleId.includes('w')) {
+                    newW = Math.max(30, startW - localDX);
+                    shiftX = -(newW - startW) / 2;
+                }
+                if (handleId.includes('s')) {
+                    newH = Math.max(30, startH + localDY);
+                    shiftY = (newH - startH) / 2;
+                }
+                if (handleId.includes('n')) {
+                    newH = Math.max(30, startH - localDY);
+                    shiftY = -(newH - startH) / 2;
+                }
+
+                // Corners preserve aspect ratio
+                if (isCorner) {
+                    const scaleW = newW / startW;
+                    const scaleH = newH / startH;
+                    // Use the larger scale factor to drive both axes
+                    const scale = Math.max(scaleW, scaleH);
+                    newW = Math.max(30, startW * scale);
+                    newH = Math.max(30, startH * scale);
+
+                    // Recalculate center shift for aspect-ratio-corrected size
+                    shiftX = 0; shiftY = 0;
+                    if (handleId.includes('e')) shiftX = (newW - startW) / 2;
+                    if (handleId.includes('w')) shiftX = -(newW - startW) / 2;
+                    if (handleId.includes('s')) shiftY = (newH - startH) / 2;
+                    if (handleId.includes('n')) shiftY = -(newH - startH) / 2;
+                }
+
+                // Convert local center shift back to canvas space
+                const canvasShiftX = shiftX * Math.cos(rad) - shiftY * Math.sin(rad);
+                const canvasShiftY = shiftX * Math.sin(rad) + shiftY * Math.cos(rad);
+
+                wrapper.style.width = newW + 'px';
+                wrapper.style.height = newH + 'px';
+                wrapper.dataset.cx = startCX + canvasShiftX;
+                wrapper.dataset.cy = startCY + canvasShiftY;
+
+                // Scale inner content to match new wrapper size
+                const inner = wrapper.querySelector('video') || wrapper.querySelector('canvas');
+                if (inner) {
+                    inner.style.width = newW + 'px';
+                    inner.style.height = newH + 'px';
+                    if (inner.tagName === 'CANVAS') {
+                        inner.width = Math.round(newW);
+                        inner.height = Math.round(newH);
+                    }
+                }
+
+                updateWrapperPosition(wrapper);
+            };
+
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
+
+        // --- Rotation handle ---
+
+        function startHandleRotate(wrapper, e) {
+            e.preventDefault();
+            const containerRect = container.getBoundingClientRect();
+            const containerScale = containerRect.width / CANVAS_W;
+
+            const onMove = (e) => {
+                const cx = parseFloat(wrapper.dataset.cx);
+                const cy = parseFloat(wrapper.dataset.cy);
+
+                // Convert mouse position to canvas space
+                const mouseCanvasX = (e.clientX - containerRect.left) / containerScale;
+                const mouseCanvasY = (e.clientY - containerRect.top) / containerScale;
+
+                // atan2 with Y inverted so 0° = up
+                let angle = Math.atan2(mouseCanvasX - cx, -(mouseCanvasY - cy)) * 180 / Math.PI;
+                // Normalize to 0-360
+                angle = ((angle % 360) + 360) % 360;
+
+                // Snap to cardinals (0, 90, 180, 270) within 3° unless Shift held
+                if (!e.shiftKey) {
+                    const cardinals = [0, 90, 180, 270, 360];
+                    for (const c of cardinals) {
+                        if (Math.abs(angle - c) < 3) {
+                            angle = c % 360;
+                            break;
+                        }
+                    }
+                }
+
+                wrapper.dataset.rotation = angle;
+                updateWrapperPosition(wrapper);
+
+                if (wrapper === selected) {
+                    document.getElementById('rotation').value = Math.round(angle);
+                }
+            };
+
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
+
+        // --- Shared wrapper helpers ---
+
+        function createWrapper(sourceId) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'video-wrapper';
+            wrapper.dataset.source = sourceId;
+            wrapper.dataset.panX = '0';
+            wrapper.dataset.panY = '0';
+            wrapper.dataset.zoom = '100';
+            wrapper.dataset.rotation = '0';
+
+            // Inner clip container for overflow hidden
+            const innerClip = document.createElement('div');
+            innerClip.className = 'inner-clip';
+            wrapper.appendChild(innerClip);
+
+            // Create 8 resize handles + rotation handle
+            createHandles(wrapper);
+
+            return { wrapper, innerClip };
+        }
+
+        function setupWrapper(wrapper) {
+            container.appendChild(wrapper);
+            makeDraggable(wrapper);
+            enableZoomAndPan(wrapper);
+
+            wrapper.addEventListener('mousedown', (e) => {
+                if (e.button === 0) selectVideo(wrapper);
+            });
+
+            wrapper.addEventListener('dblclick', (e) => {
+                wrapper.dataset.zoom = '100';
+                wrapper.dataset.panX = '0';
+                wrapper.dataset.panY = '0';
+                const inner = wrapper.querySelector('video') || wrapper.querySelector('canvas');
+                if (inner) {
+                    inner.style.width = wrapper.offsetWidth + 'px';
+                    inner.style.height = wrapper.offsetHeight + 'px';
+                }
+                applyTransform(wrapper);
+            });
+
+            videoCount++;
+        }
+
+        function removeWrapper(wrapper, cleanup) {
+            if (selected === wrapper) {
+                selected = null;
+                videoControls.style.display = 'none';
+            }
+            if (cleanup) cleanup();
+            wrapper.remove();
+        }
+
+        function deleteSelected() {
+            if (!selected) return;
+            // Find and trigger the wrapper's cleanup
+            const wrapper = selected;
+            const sourceId = wrapper.dataset.source;
+
+            if (sourceId === 'spectrogram') {
+                // Find the spectrogram state for this wrapper and clean up
+                const specState = wrapper._specState;
+                if (specState) {
+                    if (specState.animId) cancelAnimationFrame(specState.animId);
+                    spectrograms = spectrograms.filter(s => s !== specState);
+                    if (specState.source) specState.source.disconnect();
+                }
+                removeWrapper(wrapper);
+            } else {
+                const video = wrapper.querySelector('video');
+                removeWrapper(wrapper, () => { if (video) video.srcObject = null; });
+            }
+        }
+
+        // --- Webcam ---
+
+        async function startCam1() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 9999 } },
+                audio: true
+            });
+            streams.cam1 = stream;
+            addVideo(stream, 'cam1');
+        }
+
+        async function startCam2() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            const constraint = videoDevices.length > 1
+                ? { deviceId: videoDevices[1].deviceId, width: { ideal: 9999 } }
+                : { width: { ideal: 9999 } };
+            const stream = await navigator.mediaDevices.getUserMedia({ video: constraint });
+            streams.cam2 = stream;
+            addVideo(stream, 'cam2');
+        }
+
+        function addVideo(stream, sourceId) {
+            const { wrapper, innerClip } = createWrapper(sourceId);
+            wrapper.style.width = '640px';
+            wrapper.style.height = '480px';
+
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.autoplay = true;
+            video.muted = true;
+            video.playsInline = true;
+            innerClip.appendChild(video);
+
+            video.addEventListener('loadedmetadata', () => {
+                const nw = video.videoWidth;
+                const nh = video.videoHeight;
+                const maxW = CANVAS_W / 3;
+                const fitScale = Math.min(maxW / nw, 1);
+                const w = Math.round(nw * fitScale);
+                const h = Math.round(nh * fitScale);
+                wrapper.style.width = w + 'px';
+                wrapper.style.height = h + 'px';
+                video.style.width = w + 'px';
+                video.style.height = h + 'px';
+
+                // Initialize center position
+                const left = parseFloat(wrapper.style.left) || (50 + videoCount * 50);
+                const top = parseFloat(wrapper.style.top) || (50 + videoCount * 50);
+                wrapper.dataset.cx = left + w / 2;
+                wrapper.dataset.cy = top + h / 2;
+                updateWrapperPosition(wrapper);
+            });
+
+            // Set initial position before metadata loads
+            const initLeft = 50 + videoCount * 50;
+            const initTop = 50 + videoCount * 50;
+            wrapper.dataset.cx = initLeft + 320;
+            wrapper.dataset.cy = initTop + 240;
+            updateWrapperPosition(wrapper);
+
+            wrapper._cleanup = () => { video.srcObject = null; };
+            setupWrapper(wrapper);
+        }
+
+        // --- Selection & transform ---
+
+        function selectVideo(wrapper) {
+            if (selected && selected !== wrapper) selected.classList.remove('selected');
+            selected = wrapper;
+            wrapper.classList.add('selected');
+
+            document.getElementById('panX').value = wrapper.dataset.panX;
+            document.getElementById('panY').value = wrapper.dataset.panY;
+            document.getElementById('zoom').value = wrapper.dataset.zoom;
+            document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
+            videoControls.style.display = 'flex';
+        }
+
+        // Click on empty canvas area deselects
+        container.addEventListener('mousedown', (e) => {
+            if (e.target === container && selected) {
+                selected.classList.remove('selected');
+                selected = null;
+                videoControls.style.display = 'none';
+            }
+        });
+
+        function rotateSelected() {
+            if (!selected) return;
+            selected.dataset.rotation = (parseFloat(selected.dataset.rotation) + 90) % 360;
+            updateWrapperPosition(selected);
+            document.getElementById('rotation').value = Math.round(parseFloat(selected.dataset.rotation));
+        }
+
+        function updateVideoTransform() {
+            if (!selected) return;
+            const panX = parseFloat(document.getElementById('panX').value);
+            const panY = parseFloat(document.getElementById('panY').value);
+            const zoom = parseFloat(document.getElementById('zoom').value);
+            const rotation = parseFloat(document.getElementById('rotation').value);
+
+            selected.dataset.panX = panX;
+            selected.dataset.panY = panY;
+            selected.dataset.zoom = zoom;
+            selected.dataset.rotation = rotation;
+
+            applyTransform(selected);
+            updateWrapperPosition(selected);
+        }
+
+        function applyTransform(wrapper) {
+            const panX = parseFloat(wrapper.dataset.panX);
+            const panY = parseFloat(wrapper.dataset.panY);
+            const zoom = parseFloat(wrapper.dataset.zoom) / 100;
+
+            // Only pan/zoom on inner element — rotation is on wrapper
+            const el = wrapper.querySelector('video') || wrapper.querySelector('canvas');
+            if (el) {
+                el.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+            }
+
+            if (wrapper === selected) {
+                document.getElementById('panX').value = wrapper.dataset.panX;
+                document.getElementById('panY').value = wrapper.dataset.panY;
+                document.getElementById('zoom').value = wrapper.dataset.zoom;
+                document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
+            }
+        }
+
+        // --- Zoom & pan ---
+
+        function enableZoomAndPan(wrapper) {
+            wrapper.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const el = wrapper.querySelector('video') || wrapper.querySelector('canvas');
+                if (!el) return;
+
+                const rect = wrapper.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                // With transform-origin: top left, element point (ex,ey) maps to
+                // wrapper point (panX + ex*zoom, panY + ey*zoom)
+                const oldZoom = parseFloat(wrapper.dataset.zoom) / 100;
+                const delta = e.deltaY > 0 ? -10 : 10;
+                const newZoomPercent = Math.max(10, Math.min(500, parseFloat(wrapper.dataset.zoom) + delta));
+                const newZoom = newZoomPercent / 100;
+
+                const oldPanX = parseFloat(wrapper.dataset.panX);
+                const oldPanY = parseFloat(wrapper.dataset.panY);
+
+                // Find the element point under the mouse
+                const elPointX = (mouseX - oldPanX) / oldZoom;
+                const elPointY = (mouseY - oldPanY) / oldZoom;
+
+                wrapper.dataset.zoom = newZoomPercent;
+                wrapper.dataset.panX = mouseX - elPointX * newZoom;
+                wrapper.dataset.panY = mouseY - elPointY * newZoom;
+                applyTransform(wrapper);
+            });
+
+            wrapper.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            wrapper.addEventListener('mousedown', (e) => {
+                if (e.button !== 2) return;
+                e.preventDefault();
+                e.stopPropagation();
+
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const startPanX = parseFloat(wrapper.dataset.panX);
+                const startPanY = parseFloat(wrapper.dataset.panY);
+
+                const onMove = (e) => {
+                    wrapper.dataset.panX = startPanX + e.clientX - startX;
+                    wrapper.dataset.panY = startPanY + e.clientY - startY;
+                    applyTransform(wrapper);
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
+        // --- Duplicate ---
+
+        function duplicateSelected() {
+            if (!selected) return;
+            const sourceId = selected.dataset.source;
+            if (sourceId === 'spectrogram') {
+                addSpectrogram();
+            } else if (streams[sourceId]) {
+                addVideo(streams[sourceId], sourceId);
+            }
+        }
+
+        // --- Spectrogram ---
+
+        function zeroSpectrogram() {
+            spectrograms.forEach(s => {
+                s.analyser.getByteFrequencyData(s.dataArray);
+                s.baseline = new Uint8Array(s.dataArray);
+            });
+        }
+
+        function resetSpectrogram() {
+            spectrograms.forEach(s => { s.baseline = null; });
+        }
+
+        async function addSpectrogram() {
+            const audioConstraint = selectedAudioDeviceId
+                ? { deviceId: { exact: selectedAudioDeviceId } }
+                : true;
+
+            let audioStream;
+            try {
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
+            } catch (err) {
+                console.error('Could not access selected microphone:', err);
+                if (streams.cam1 && streams.cam1.getAudioTracks().length > 0) {
+                    audioStream = streams.cam1;
+                } else {
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                }
+            }
+
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(audioStream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.8;
+            source.connect(analyser);
+
+            const freqBinCount = analyser.frequencyBinCount;
+            const specWidth = 800;
+            const specHeight = 400;
+
+            const { wrapper, innerClip } = createWrapper('spectrogram');
+            wrapper.style.width = specWidth + 'px';
+            wrapper.style.height = specHeight + 'px';
+
+            const canvas = document.createElement('canvas');
+            canvas.width = specWidth;
+            canvas.height = specHeight;
+            canvas.style.width = specWidth + 'px';
+            canvas.style.height = specHeight + 'px';
+            const ctx = canvas.getContext('2d');
+            innerClip.appendChild(canvas);
+
+            const dataArray = new Uint8Array(freqBinCount);
+            const specState = { analyser, dataArray, baseline: null, animId: null, source };
+            spectrograms.push(specState);
+            wrapper._specState = specState;
+
+            // Initialize center position
+            const initLeft = 50 + videoCount * 50;
+            const initTop = 50 + videoCount * 50;
+            wrapper.dataset.cx = initLeft + specWidth / 2;
+            wrapper.dataset.cy = initTop + specHeight / 2;
+            updateWrapperPosition(wrapper);
+
+            setupWrapper(wrapper);
+
+            // Scrolling spectrogram — 30 columns/sec
+            const msPerColumn = 33;
+            let lastColumnTime = performance.now();
+
+            function draw(now) {
+                specState.animId = requestAnimationFrame(draw);
+
+                const elapsed = now - lastColumnTime;
+                if (elapsed < msPerColumn) return;
+
+                const columns = Math.min(Math.floor(elapsed / msPerColumn), 3);
+                lastColumnTime += columns * msPerColumn;
+
+                analyser.getByteFrequencyData(dataArray);
+
+                const w = canvas.width;
+                const h = canvas.height;
+
+                const imageData = ctx.getImageData(columns, 0, w - columns, h);
+                ctx.putImageData(imageData, 0, 0);
+
+                for (let col = 0; col < columns; col++) {
+                    const x = w - columns + col;
+                    for (let y = 0; y < h; y++) {
+                        const freqIndex = Math.floor((1 - y / h) * freqBinCount);
+                        let value = dataArray[freqIndex] || 0;
+                        if (specState.baseline) {
+                            value = Math.max(0, value - specState.baseline[freqIndex]);
+                        }
+                        const norm = value / 255;
+
+                        let r, g, b;
+                        if (norm < 0.25) {
+                            r = 0; g = 0; b = Math.floor(norm * 4 * 255);
+                        } else if (norm < 0.5) {
+                            r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
+                        } else if (norm < 0.75) {
+                            r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
+                        } else {
+                            r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
+                        }
+
+                        ctx.fillStyle = `rgb(${r},${g},${b})`;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+
+            specState.animId = requestAnimationFrame(draw);
+        }
+
+        // --- Drag ---
+
+        function makeDraggable(el) {
+            el.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                // Don't drag when clicking handles
+                if (e.target.classList.contains('handle') || e.target.classList.contains('handle-rotate')) return;
+                e.preventDefault();
+
+                const containerRect = container.getBoundingClientRect();
+                const containerScale = containerRect.width / CANVAS_W;
+
+                let lastX = e.clientX;
+                let lastY = e.clientY;
+
+                const onMove = (e) => {
+                    // Screen deltas converted to canvas space
+                    const dx = (e.clientX - lastX) / containerScale;
+                    const dy = (e.clientY - lastY) / containerScale;
+
+                    el.dataset.cx = parseFloat(el.dataset.cx) + dx;
+                    el.dataset.cy = parseFloat(el.dataset.cy) + dy;
+                    updateWrapperPosition(el);
+
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                };
+
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+    </script>
+</body>
+</html>
