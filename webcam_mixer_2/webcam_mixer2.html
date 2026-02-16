@@ -695,9 +695,19 @@
                 const el = wrapper.querySelector('video') || wrapper.querySelector('canvas');
                 if (!el) return;
 
-                const rect = wrapper.getBoundingClientRect();
-                const mouseX = e.clientX - rect.left;
-                const mouseY = e.clientY - rect.top;
+                // Compute mouse position in wrapper-local coordinates
+                const rotation = parseFloat(wrapper.dataset.rotation) || 0;
+                const rad = rotation * Math.PI / 180;
+                const cx = parseFloat(wrapper.dataset.cx);
+                const cy = parseFloat(wrapper.dataset.cy);
+                const containerRect = container.getBoundingClientRect();
+                const cScale = containerRect.width / CANVAS_W;
+                const mouseCanvasX = (e.clientX - containerRect.left) / cScale;
+                const mouseCanvasY = (e.clientY - containerRect.top) / cScale;
+                const offsetX = mouseCanvasX - cx;
+                const offsetY = mouseCanvasY - cy;
+                const mouseX = offsetX * Math.cos(rad) + offsetY * Math.sin(rad) + wrapper.offsetWidth / 2;
+                const mouseY = -offsetX * Math.sin(rad) + offsetY * Math.cos(rad) + wrapper.offsetHeight / 2;
 
                 // With transform-origin: top left, element point (ex,ey) maps to
                 // wrapper point (panX + ex*zoom, panY + ey*zoom)
@@ -734,8 +744,13 @@
                 const startPanY = parseFloat(wrapper.dataset.panY);
 
                 const onMove = (e) => {
-                    wrapper.dataset.panX = startPanX + (e.clientX - startX) / containerScale;
-                    wrapper.dataset.panY = startPanY + (e.clientY - startY) / containerScale;
+                    const rotation = parseFloat(wrapper.dataset.rotation) || 0;
+                    const rad = rotation * Math.PI / 180;
+                    const rawDX = (e.clientX - startX) / containerScale;
+                    const rawDY = (e.clientY - startY) / containerScale;
+                    // Rotate screen-space delta into wrapper-local space
+                    wrapper.dataset.panX = startPanX + rawDX * Math.cos(rad) + rawDY * Math.sin(rad);
+                    wrapper.dataset.panY = startPanY - rawDX * Math.sin(rad) + rawDY * Math.cos(rad);
                     applyTransform(wrapper);
                 };
                 const onUp = () => {
