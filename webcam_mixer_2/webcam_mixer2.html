@@ -104,6 +104,10 @@
             transform-origin: center center;
         }
 
+        .video-wrapper.spectrogram-source {
+            border-color: #666;
+        }
+
         .video-wrapper.selected {
             border-color: #ff0000;
             border-style: dashed;
@@ -233,7 +237,7 @@
         <button onclick="duplicateSelected()">Duplicate</button>
         <button onclick="document.documentElement.requestFullscreen()">Fullscreen</button>
 
-        <div class="control-group" id="video-controls" style="display: none;">
+        <div class="control-group" id="video-controls" style="visibility: hidden;">
             <label>Pan X:</label>
             <input type="number" id="panX" value="0" onchange="updateVideoTransform()">
             <label>Y:</label>
@@ -542,7 +546,7 @@
         function removeWrapper(wrapper) {
             if (selected === wrapper) {
                 selected = null;
-                videoControls.style.display = 'none';
+                videoControls.style.visibility = 'hidden';
             }
             if (wrapper._cleanup) wrapper._cleanup();
             wrapper.remove();
@@ -629,7 +633,7 @@
             document.getElementById('panY').value = wrapper.dataset.panY;
             document.getElementById('zoom').value = wrapper.dataset.zoom;
             document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
-            videoControls.style.display = 'flex';
+            videoControls.style.visibility = 'visible';
         }
 
         // Click on empty canvas area deselects
@@ -637,7 +641,7 @@
             if (e.target === container && selected) {
                 selected.classList.remove('selected');
                 selected = null;
-                videoControls.style.display = 'none';
+                videoControls.style.visibility = 'hidden';
             }
         });
 
@@ -779,10 +783,18 @@
             source.connect(analyser);
 
             const freqBinCount = analyser.frequencyBinCount;
-            const specWidth = 800;
-            const specHeight = 400;
+            const nyquist = audioCtx.sampleRate / 2;
+            const maxFreq = Math.min(20000, nyquist);
+            const maxBin = Math.floor((maxFreq / nyquist) * freqBinCount);
+            const pad = 6;
+            const fontSize = 20;
+            const axisW = 56;
+            const legendH = 48;
+            const specWidth = axisW + 800;
+            const specHeight = legendH + 400;
 
             const { wrapper, innerClip } = createWrapper('spectrogram');
+            wrapper.classList.add('spectrogram-source');
             wrapper.style.width = specWidth + 'px';
             wrapper.style.height = specHeight + 'px';
 
@@ -817,6 +829,90 @@
             const msPerColumn = 33;
             let lastColumnTime = performance.now();
 
+            function normToColor(norm) {
+                let r, g, b;
+                if (norm < 0.25) {
+                    r = 0; g = 0; b = Math.floor(norm * 4 * 255);
+                } else if (norm < 0.5) {
+                    r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
+                } else if (norm < 0.75) {
+                    r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
+                } else {
+                    r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
+                }
+                return `rgb(${r},${g},${b})`;
+            }
+
+            function drawOverlays(w, h) {
+                const dataH = h - legendH;
+                const minDb = analyser.minDecibels;
+                const maxDb = analyser.maxDecibels;
+
+                // --- Frequency axis (left) ---
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, legendH, axisW, dataH);
+
+                const tickFreqs = [2000, 5000, 10000, 20000].filter(f => f <= maxFreq);
+                ctx.fillStyle = '#999';
+                ctx.font = fontSize + 'px monospace';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.strokeStyle = '#666';
+                ctx.lineWidth = 1;
+
+                for (const freq of tickFreqs) {
+                    const y = legendH + Math.round(dataH * (1 - freq / maxFreq));
+                    const clampedY = Math.max(legendH + fontSize / 2 + pad, Math.min(h - fontSize / 2 - pad, y));
+                    ctx.beginPath();
+                    ctx.moveTo(axisW - 4, y + 0.5);
+                    ctx.lineTo(axisW, y + 0.5);
+                    ctx.stroke();
+                    const label = freq >= 1000 ? (freq / 1000) + 'k' : freq + '';
+                    ctx.fillText(label, axisW - pad, clampedY);
+                }
+
+                // --- Color legend (top, horizontal) ---
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, w, legendH);
+
+                // Draw horizontal gradient bar
+                const barLeft = axisW + pad;
+                const barRight = w - pad;
+                const barW = barRight - barLeft;
+                const barY = pad;
+                const barH = 10;
+                for (let px = 0; px < barW; px++) {
+                    const norm = px / barW;
+                    ctx.fillStyle = normToColor(norm);
+                    ctx.fillRect(barLeft + px, barY, 1, barH);
+                }
+                ctx.strokeStyle = '#666';
+                ctx.strokeRect(barLeft + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+                // dB tick labels below the bar
+                const dbRange = maxDb - minDb;
+                const dbStep = 20;
+                const firstTick = Math.ceil(minDb / dbStep) * dbStep;
+                ctx.fillStyle = '#999';
+                ctx.font = fontSize + 'px monospace';
+                ctx.textBaseline = 'top';
+                const labelY = barY + barH + pad;
+
+                for (let db = firstTick; db <= maxDb; db += dbStep) {
+                    const norm = (db - minDb) / dbRange;
+                    const x = barLeft + norm * barW;
+                    // Tick mark
+                    ctx.strokeStyle = '#666';
+                    ctx.beginPath();
+                    ctx.moveTo(x + 0.5, barY + barH);
+                    ctx.lineTo(x + 0.5, barY + barH + 3);
+                    ctx.stroke();
+                    // Label
+                    ctx.textAlign = 'center';
+                    ctx.fillText(db + 'dB', x, labelY);
+                }
+            }
+
             function draw(now) {
                 specState.animId = requestAnimationFrame(draw);
 
@@ -830,35 +926,28 @@
 
                 const w = canvas.width;
                 const h = canvas.height;
+                const dataW = w - axisW;
+                const dataH = h - legendH;
 
-                const imageData = ctx.getImageData(columns, 0, w - columns, h);
-                ctx.putImageData(imageData, 0, 0);
+                // Scroll only the data area
+                const imageData = ctx.getImageData(axisW + columns, legendH, dataW - columns, dataH);
+                ctx.putImageData(imageData, axisW, legendH);
 
                 for (let col = 0; col < columns; col++) {
-                    const x = w - columns + col;
-                    for (let y = 0; y < h; y++) {
-                        const freqIndex = Math.floor((1 - y / h) * freqBinCount);
+                    const x = axisW + dataW - columns + col;
+                    for (let y = legendH; y < h; y++) {
+                        const freqIndex = Math.floor((1 - (y - legendH) / dataH) * maxBin);
                         let value = dataArray[freqIndex] || 0;
                         if (specState.baseline) {
                             value = Math.max(0, value - specState.baseline[freqIndex]);
                         }
                         const norm = value / 255;
-
-                        let r, g, b;
-                        if (norm < 0.25) {
-                            r = 0; g = 0; b = Math.floor(norm * 4 * 255);
-                        } else if (norm < 0.5) {
-                            r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
-                        } else if (norm < 0.75) {
-                            r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
-                        } else {
-                            r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
-                        }
-
-                        ctx.fillStyle = `rgb(${r},${g},${b})`;
+                        ctx.fillStyle = normToColor(norm);
                         ctx.fillRect(x, y, 1, 1);
                     }
                 }
+
+                drawOverlays(w, h);
             }
 
             specState.animId = requestAnimationFrame(draw);
