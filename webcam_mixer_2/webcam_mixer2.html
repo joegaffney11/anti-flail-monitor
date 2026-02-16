@@ -863,15 +863,29 @@
                 }
             }
 
-            // Render overlay once (it's static)
-            renderOverlay(specWidth, specHeight);
+            // Recompute overlay and freqMap for current canvas size
+            let cachedW = 0, cachedH = 0;
+            let dataH = 0;
+            let freqMap = null;
 
-            // Precompute frequency bin index for each pixel row
-            const dataH = specHeight - legendH;
-            const freqMap = new Uint16Array(dataH);
-            for (let row = 0; row < dataH; row++) {
-                freqMap[row] = Math.floor((1 - row / dataH) * maxBin);
+            function rebuildCache(w, h) {
+                cachedW = w;
+                cachedH = h;
+                dataH = h - legendH;
+
+                // Rebuild frequency map
+                freqMap = new Uint16Array(dataH);
+                for (let row = 0; row < dataH; row++) {
+                    freqMap[row] = Math.floor((1 - row / dataH) * maxBin);
+                }
+
+                // Rebuild overlay
+                overlayCanvas.width = w;
+                overlayCanvas.height = h;
+                renderOverlay(w, h);
             }
+
+            rebuildCache(specWidth, specHeight);
 
             // Scrolling spectrogram — 30 columns/sec
             const msPerColumn = 33;
@@ -890,6 +904,12 @@
 
                 const w = canvas.width;
                 const h = canvas.height;
+
+                // Rebuild cached overlay & freqMap if canvas was resized
+                if (w !== cachedW || h !== cachedH) {
+                    rebuildCache(w, h);
+                }
+
                 const dataW = w - axisW;
 
                 // Scroll only the data area
