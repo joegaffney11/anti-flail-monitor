@@ -100,8 +100,6 @@
             border: 2px solid transparent;
             cursor: move;
             overflow: visible;
-            border-radius: 0;
-            transform-origin: center center;
         }
 
         .video-wrapper.spectrogram-source {
@@ -120,7 +118,6 @@
             transform-origin: top left;
         }
 
-        /* Clip inner content to wrapper bounds */
         .video-wrapper .inner-clip {
             position: absolute;
             top: 0; left: 0;
@@ -129,7 +126,6 @@
             pointer-events: none;
         }
 
-        /* Handles — only visible when selected */
         .handle {
             position: absolute;
             width: 10px;
@@ -140,9 +136,7 @@
             display: none;
         }
 
-        .video-wrapper.selected .handle {
-            display: block;
-        }
+        .video-wrapper.selected .handle { display: block; }
 
         .handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
         .handle-n  { top: -5px; left: 50%; margin-left: -5px; cursor: n-resize; }
@@ -168,9 +162,7 @@
             display: none;
         }
 
-        .video-wrapper.selected .handle-rotate {
-            display: block;
-        }
+        .video-wrapper.selected .handle-rotate { display: block; }
 
         .handle-line {
             position: absolute;
@@ -185,11 +177,8 @@
             pointer-events: none;
         }
 
-        .video-wrapper.selected .handle-line {
-            display: block;
-        }
+        .video-wrapper.selected .handle-line { display: block; }
 
-        /* Fullscreen */
         :fullscreen,
         :-webkit-full-screen {
             background: #000;
@@ -255,34 +244,55 @@
         const container = document.getElementById('canvas-container');
         const videoControls = document.getElementById('video-controls');
         const controlsEl = document.getElementById('controls');
+        const elPanX = document.getElementById('panX');
+        const elPanY = document.getElementById('panY');
+        const elZoom = document.getElementById('zoom');
+        const elRotation = document.getElementById('rotation');
         const streams = {};
         let selected = null;
         let videoCount = 0;
         let spectrograms = [];
 
-        // Canvas matches screen resolution so fullscreen is pixel-perfect
         const CANVAS_W = screen.width;
         const CANVAS_H = screen.height;
         container.style.width = CANVAS_W + 'px';
         container.style.height = CANVAS_H + 'px';
 
+        // --- Precomputed color LUT for spectrogram (256 entries, each [r,g,b]) ---
+        const colorLUT = new Uint8Array(256 * 3);
+        for (let i = 0; i < 256; i++) {
+            const norm = i / 255;
+            let r, g, b;
+            if (norm < 0.25) {
+                r = 0; g = 0; b = norm * 4 * 255;
+            } else if (norm < 0.5) {
+                r = 0; g = (norm - 0.25) * 4 * 255; b = 255;
+            } else if (norm < 0.75) {
+                r = (norm - 0.5) * 4 * 255; g = 255; b = (1 - (norm - 0.5) * 4) * 255;
+            } else {
+                r = 255; g = 255; b = (norm - 0.75) * 4 * 255;
+            }
+            const off = i * 3;
+            colorLUT[off] = r;
+            colorLUT[off + 1] = g;
+            colorLUT[off + 2] = b;
+        }
+
         // --- Container scaling ---
 
         function updateContainerScale() {
+            let scale, offsetX, offsetY;
             if (document.fullscreenElement) {
-                const scale = Math.max(window.innerWidth / CANVAS_W, window.innerHeight / CANVAS_H);
-                const offsetX = (window.innerWidth - CANVAS_W * scale) / 2;
-                const offsetY = (window.innerHeight - CANVAS_H * scale) / 2;
-                container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+                scale = Math.max(window.innerWidth / CANVAS_W, window.innerHeight / CANVAS_H);
+                offsetX = (window.innerWidth - CANVAS_W * scale) / 2;
+                offsetY = (window.innerHeight - CANVAS_H * scale) / 2;
             } else {
-                const controlsH = controlsEl.offsetHeight;
-                const availH = Math.max(100, window.innerHeight - controlsH);
-                const scale = Math.min(availH / CANVAS_H, window.innerWidth / CANVAS_W);
-                const scaledW = CANVAS_W * scale;
-                const offsetX = (window.innerWidth - scaledW) / 2;
-                const offsetY = 0;
-                container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+                const availH = Math.max(100, window.innerHeight - controlsEl.offsetHeight);
+                scale = Math.min(availH / CANVAS_H, window.innerWidth / CANVAS_W);
+                offsetX = (window.innerWidth - CANVAS_W * scale) / 2;
+                offsetY = 0;
             }
+            container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
         }
 
         updateContainerScale();
@@ -305,9 +315,10 @@
 
         // --- Handle creation ---
 
+        const handleIds = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+
         function createHandles(wrapper) {
-            const handleIds = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-            handleIds.forEach(id => {
+            for (const id of handleIds) {
                 const h = document.createElement('div');
                 h.className = `handle handle-${id}`;
                 h.dataset.handle = id;
@@ -317,14 +328,12 @@
                     startHandleResize(wrapper, id, e);
                 });
                 wrapper.appendChild(h);
-            });
+            }
 
-            // Rotation line
             const line = document.createElement('div');
             line.className = 'handle-line';
             wrapper.appendChild(line);
 
-            // Rotation handle
             const rotHandle = document.createElement('div');
             rotHandle.className = 'handle-rotate';
             rotHandle.addEventListener('mousedown', (e) => {
@@ -340,13 +349,9 @@
         function updateWrapperPosition(wrapper) {
             const cx = parseFloat(wrapper.dataset.cx);
             const cy = parseFloat(wrapper.dataset.cy);
-            const w = wrapper.offsetWidth;
-            const h = wrapper.offsetHeight;
-            wrapper.style.left = (cx - w / 2) + 'px';
-            wrapper.style.top = (cy - h / 2) + 'px';
-
-            const rotation = parseFloat(wrapper.dataset.rotation) || 0;
-            wrapper.style.transform = `rotate(${rotation}deg)`;
+            wrapper.style.left = (cx - wrapper.offsetWidth / 2) + 'px';
+            wrapper.style.top = (cy - wrapper.offsetHeight / 2) + 'px';
+            wrapper.style.transform = `rotate(${parseFloat(wrapper.dataset.rotation) || 0}deg)`;
         }
 
         // --- Resize with rotation ---
@@ -360,29 +365,22 @@
             const startCY = parseFloat(wrapper.dataset.cy);
             const rotation = parseFloat(wrapper.dataset.rotation) || 0;
             const rad = rotation * Math.PI / 180;
-
-            // Get the container's transform to convert screen deltas to canvas deltas
-            const containerRect = container.getBoundingClientRect();
-            const containerScale = containerRect.width / CANVAS_W;
-
-            const isCorner = ['nw', 'ne', 'sw', 'se'].includes(handleId);
+            const cosR = Math.cos(rad);
+            const sinR = Math.sin(rad);
+            const containerScale = container.getBoundingClientRect().width / CANVAS_W;
+            const isCorner = handleId.length === 2;
 
             const onMove = (e) => {
-                // Convert screen-space mouse delta to canvas-space
                 const rawDX = (e.clientX - startMouseX) / containerScale;
                 const rawDY = (e.clientY - startMouseY) / containerScale;
-
-                // Project into wrapper's local coordinate system
-                const localDX = rawDX * Math.cos(rad) + rawDY * Math.sin(rad);
-                const localDY = -rawDX * Math.sin(rad) + rawDY * Math.cos(rad);
+                const localDX = rawDX * cosR + rawDY * sinR;
+                const localDY = -rawDX * sinR + rawDY * cosR;
 
                 let newW = startW;
                 let newH = startH;
-                // How much the center shifts in local space
                 let shiftX = 0;
                 let shiftY = 0;
 
-                // Determine which axes change and in which direction
                 if (handleId.includes('e')) {
                     newW = Math.max(30, startW + localDX);
                     shiftX = (newW - startW) / 2;
@@ -400,16 +398,10 @@
                     shiftY = -(newH - startH) / 2;
                 }
 
-                // Corners preserve aspect ratio
                 if (isCorner) {
-                    const scaleW = newW / startW;
-                    const scaleH = newH / startH;
-                    // Use the larger scale factor to drive both axes
-                    const scale = Math.max(scaleW, scaleH);
+                    const scale = Math.max(newW / startW, newH / startH);
                     newW = Math.max(30, startW * scale);
                     newH = Math.max(30, startH * scale);
-
-                    // Recalculate center shift for aspect-ratio-corrected size
                     shiftX = 0; shiftY = 0;
                     if (handleId.includes('e')) shiftX = (newW - startW) / 2;
                     if (handleId.includes('w')) shiftX = -(newW - startW) / 2;
@@ -417,16 +409,11 @@
                     if (handleId.includes('n')) shiftY = -(newH - startH) / 2;
                 }
 
-                // Convert local center shift back to canvas space
-                const canvasShiftX = shiftX * Math.cos(rad) - shiftY * Math.sin(rad);
-                const canvasShiftY = shiftX * Math.sin(rad) + shiftY * Math.cos(rad);
-
                 wrapper.style.width = newW + 'px';
                 wrapper.style.height = newH + 'px';
-                wrapper.dataset.cx = startCX + canvasShiftX;
-                wrapper.dataset.cy = startCY + canvasShiftY;
+                wrapper.dataset.cx = startCX + shiftX * cosR - shiftY * sinR;
+                wrapper.dataset.cy = startCY + shiftX * sinR + shiftY * cosR;
 
-                // Scale inner content to match new wrapper size
                 const inner = wrapper.querySelector('video') || wrapper.querySelector('canvas');
                 if (inner) {
                     inner.style.width = newW + 'px';
@@ -455,24 +442,20 @@
             e.preventDefault();
             const containerRect = container.getBoundingClientRect();
             const containerScale = containerRect.width / CANVAS_W;
+            const rectLeft = containerRect.left;
+            const rectTop = containerRect.top;
 
             const onMove = (e) => {
                 const cx = parseFloat(wrapper.dataset.cx);
                 const cy = parseFloat(wrapper.dataset.cy);
+                const mouseCanvasX = (e.clientX - rectLeft) / containerScale;
+                const mouseCanvasY = (e.clientY - rectTop) / containerScale;
 
-                // Convert mouse position to canvas space
-                const mouseCanvasX = (e.clientX - containerRect.left) / containerScale;
-                const mouseCanvasY = (e.clientY - containerRect.top) / containerScale;
-
-                // atan2 with Y inverted so 0° = up
                 let angle = Math.atan2(mouseCanvasX - cx, -(mouseCanvasY - cy)) * 180 / Math.PI;
-                // Normalize to 0-360
                 angle = ((angle % 360) + 360) % 360;
 
-                // Snap to cardinals (0, 90, 180, 270) within 3° unless Shift held
                 if (!e.shiftKey) {
-                    const cardinals = [0, 90, 180, 270, 360];
-                    for (const c of cardinals) {
+                    for (const c of [0, 90, 180, 270, 360]) {
                         if (Math.abs(angle - c) < 3) {
                             angle = c % 360;
                             break;
@@ -484,7 +467,7 @@
                 updateWrapperPosition(wrapper);
 
                 if (wrapper === selected) {
-                    document.getElementById('rotation').value = Math.round(angle);
+                    elRotation.value = Math.round(angle);
                 }
             };
 
@@ -508,12 +491,10 @@
             wrapper.dataset.zoom = '100';
             wrapper.dataset.rotation = '0';
 
-            // Inner clip container for overflow hidden
             const innerClip = document.createElement('div');
             innerClip.className = 'inner-clip';
             wrapper.appendChild(innerClip);
 
-            // Create 8 resize handles + rotation handle
             createHandles(wrapper);
 
             return { wrapper, innerClip };
@@ -528,7 +509,7 @@
                 if (e.button === 0) selectVideo(wrapper);
             });
 
-            wrapper.addEventListener('dblclick', (e) => {
+            wrapper.addEventListener('dblclick', () => {
                 wrapper.dataset.zoom = '100';
                 wrapper.dataset.panX = '0';
                 wrapper.dataset.panY = '0';
@@ -553,8 +534,7 @@
         }
 
         function deleteSelected() {
-            if (!selected) return;
-            removeWrapper(selected);
+            if (selected) removeWrapper(selected);
         }
 
         // --- Webcam ---
@@ -594,8 +574,7 @@
             video.addEventListener('loadedmetadata', () => {
                 const nw = video.videoWidth;
                 const nh = video.videoHeight;
-                const maxW = CANVAS_W / 3;
-                const fitScale = Math.min(maxW / nw, 1);
+                const fitScale = Math.min(CANVAS_W / 3 / nw, 1);
                 const w = Math.round(nw * fitScale);
                 const h = Math.round(nh * fitScale);
                 wrapper.style.width = w + 'px';
@@ -603,7 +582,6 @@
                 video.style.width = w + 'px';
                 video.style.height = h + 'px';
 
-                // Initialize center position
                 const left = parseFloat(wrapper.style.left) || (50 + videoCount * 50);
                 const top = parseFloat(wrapper.style.top) || (50 + videoCount * 50);
                 wrapper.dataset.cx = left + w / 2;
@@ -611,7 +589,6 @@
                 updateWrapperPosition(wrapper);
             });
 
-            // Set initial position before metadata loads
             const initLeft = 50 + videoCount * 50;
             const initTop = 50 + videoCount * 50;
             wrapper.dataset.cx = initLeft + 320;
@@ -629,14 +606,13 @@
             selected = wrapper;
             wrapper.classList.add('selected');
 
-            document.getElementById('panX').value = wrapper.dataset.panX;
-            document.getElementById('panY').value = wrapper.dataset.panY;
-            document.getElementById('zoom').value = wrapper.dataset.zoom;
-            document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
+            elPanX.value = wrapper.dataset.panX;
+            elPanY.value = wrapper.dataset.panY;
+            elZoom.value = wrapper.dataset.zoom;
+            elRotation.value = Math.round(parseFloat(wrapper.dataset.rotation));
             videoControls.style.visibility = 'visible';
         }
 
-        // Click on empty canvas area deselects
         container.addEventListener('mousedown', (e) => {
             if (e.target === container && selected) {
                 selected.classList.remove('selected');
@@ -649,20 +625,15 @@
             if (!selected) return;
             selected.dataset.rotation = (parseFloat(selected.dataset.rotation) + 90) % 360;
             updateWrapperPosition(selected);
-            document.getElementById('rotation').value = Math.round(parseFloat(selected.dataset.rotation));
+            elRotation.value = Math.round(parseFloat(selected.dataset.rotation));
         }
 
         function updateVideoTransform() {
             if (!selected) return;
-            const panX = parseFloat(document.getElementById('panX').value);
-            const panY = parseFloat(document.getElementById('panY').value);
-            const zoom = parseFloat(document.getElementById('zoom').value);
-            const rotation = parseFloat(document.getElementById('rotation').value);
-
-            selected.dataset.panX = panX;
-            selected.dataset.panY = panY;
-            selected.dataset.zoom = zoom;
-            selected.dataset.rotation = rotation;
+            selected.dataset.panX = parseFloat(elPanX.value);
+            selected.dataset.panY = parseFloat(elPanY.value);
+            selected.dataset.zoom = parseFloat(elZoom.value);
+            selected.dataset.rotation = parseFloat(elRotation.value);
 
             applyTransform(selected);
             updateWrapperPosition(selected);
@@ -673,17 +644,16 @@
             const panY = parseFloat(wrapper.dataset.panY);
             const zoom = parseFloat(wrapper.dataset.zoom) / 100;
 
-            // Only pan/zoom on inner element — rotation is on wrapper
             const el = wrapper.querySelector('video') || wrapper.querySelector('canvas');
             if (el) {
                 el.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
             }
 
             if (wrapper === selected) {
-                document.getElementById('panX').value = wrapper.dataset.panX;
-                document.getElementById('panY').value = wrapper.dataset.panY;
-                document.getElementById('zoom').value = wrapper.dataset.zoom;
-                document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
+                elPanX.value = wrapper.dataset.panX;
+                elPanY.value = wrapper.dataset.panY;
+                elZoom.value = wrapper.dataset.zoom;
+                elRotation.value = Math.round(parseFloat(wrapper.dataset.rotation));
             }
         }
 
@@ -699,8 +669,6 @@
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
 
-                // With transform-origin: top left, element point (ex,ey) maps to
-                // wrapper point (panX + ex*zoom, panY + ey*zoom)
                 const oldZoom = parseFloat(wrapper.dataset.zoom) / 100;
                 const delta = e.deltaY > 0 ? -10 : 10;
                 const newZoomPercent = Math.max(10, Math.min(500, parseFloat(wrapper.dataset.zoom) + delta));
@@ -709,7 +677,6 @@
                 const oldPanX = parseFloat(wrapper.dataset.panX);
                 const oldPanY = parseFloat(wrapper.dataset.panY);
 
-                // Find the element point under the mouse
                 const elPointX = (mouseX - oldPanX) / oldZoom;
                 const elPointY = (mouseY - oldPanY) / oldZoom;
 
@@ -726,8 +693,7 @@
                 e.preventDefault();
                 e.stopPropagation();
 
-                const containerRect = container.getBoundingClientRect();
-                const containerScale = containerRect.width / CANVAS_W;
+                const containerScale = container.getBoundingClientRect().width / CANVAS_W;
                 const startX = e.clientX;
                 const startY = e.clientY;
                 const startPanX = parseFloat(wrapper.dataset.panX);
@@ -816,7 +782,6 @@
                 if (specState.source) specState.source.disconnect();
             };
 
-            // Initialize center position
             const initLeft = 50 + videoCount * 50;
             const initTop = 50 + videoCount * 50;
             wrapper.dataset.cx = initLeft + specWidth / 2;
@@ -825,93 +790,92 @@
 
             setupWrapper(wrapper);
 
-            // Scrolling spectrogram — 30 columns/sec
-            const msPerColumn = 33;
-            let lastColumnTime = performance.now();
+            // --- Pre-render static overlay to offscreen canvas ---
+            const overlayCanvas = document.createElement('canvas');
+            overlayCanvas.width = specWidth;
+            overlayCanvas.height = specHeight;
+            const oCtx = overlayCanvas.getContext('2d');
 
-            function normToColor(norm) {
-                let r, g, b;
-                if (norm < 0.25) {
-                    r = 0; g = 0; b = Math.floor(norm * 4 * 255);
-                } else if (norm < 0.5) {
-                    r = 0; g = Math.floor((norm - 0.25) * 4 * 255); b = 255;
-                } else if (norm < 0.75) {
-                    r = Math.floor((norm - 0.5) * 4 * 255); g = 255; b = Math.floor((1 - (norm - 0.5) * 4) * 255);
-                } else {
-                    r = 255; g = 255; b = Math.floor((norm - 0.75) * 4 * 255);
-                }
-                return `rgb(${r},${g},${b})`;
-            }
-
-            function drawOverlays(w, h) {
+            function renderOverlay(w, h) {
+                oCtx.clearRect(0, 0, w, h);
                 const dataH = h - legendH;
                 const minDb = analyser.minDecibels;
                 const maxDb = analyser.maxDecibels;
 
-                // --- Frequency axis (left) ---
-                ctx.fillStyle = '#000';
-                ctx.fillRect(0, legendH, axisW, dataH);
+                // Frequency axis
+                oCtx.fillStyle = '#000';
+                oCtx.fillRect(0, legendH, axisW, dataH);
 
                 const tickFreqs = [2000, 5000, 10000, 20000].filter(f => f <= maxFreq);
-                ctx.fillStyle = '#999';
-                ctx.font = fontSize + 'px monospace';
-                ctx.textAlign = 'right';
-                ctx.textBaseline = 'middle';
-                ctx.strokeStyle = '#666';
-                ctx.lineWidth = 1;
+                oCtx.fillStyle = '#999';
+                oCtx.font = fontSize + 'px monospace';
+                oCtx.textAlign = 'right';
+                oCtx.textBaseline = 'middle';
+                oCtx.strokeStyle = '#666';
+                oCtx.lineWidth = 1;
 
                 for (const freq of tickFreqs) {
                     const y = legendH + Math.round(dataH * (1 - freq / maxFreq));
                     const clampedY = Math.max(legendH + fontSize / 2 + pad, Math.min(h - fontSize / 2 - pad, y));
-                    ctx.beginPath();
-                    ctx.moveTo(axisW - 4, y + 0.5);
-                    ctx.lineTo(axisW, y + 0.5);
-                    ctx.stroke();
+                    oCtx.beginPath();
+                    oCtx.moveTo(axisW - 4, y + 0.5);
+                    oCtx.lineTo(axisW, y + 0.5);
+                    oCtx.stroke();
                     const label = freq >= 1000 ? (freq / 1000) + 'k' : freq + '';
-                    ctx.fillText(label, axisW - pad, clampedY);
+                    oCtx.fillText(label, axisW - pad, clampedY);
                 }
 
-                // --- Color legend (top, horizontal) ---
-                ctx.fillStyle = '#000';
-                ctx.fillRect(0, 0, w, legendH);
+                // Color legend
+                oCtx.fillStyle = '#000';
+                oCtx.fillRect(0, 0, w, legendH);
 
-                // Draw horizontal gradient bar
                 const barLeft = axisW + pad;
                 const barRight = w - pad;
                 const barW = barRight - barLeft;
                 const barY = pad;
                 const barH = 10;
                 for (let px = 0; px < barW; px++) {
-                    const norm = px / barW;
-                    ctx.fillStyle = normToColor(norm);
-                    ctx.fillRect(barLeft + px, barY, 1, barH);
+                    const idx = Math.round((px / barW) * 255) * 3;
+                    oCtx.fillStyle = `rgb(${colorLUT[idx]},${colorLUT[idx+1]},${colorLUT[idx+2]})`;
+                    oCtx.fillRect(barLeft + px, barY, 1, barH);
                 }
-                ctx.strokeStyle = '#666';
-                ctx.strokeRect(barLeft + 0.5, barY + 0.5, barW - 1, barH - 1);
+                oCtx.strokeStyle = '#666';
+                oCtx.strokeRect(barLeft + 0.5, barY + 0.5, barW - 1, barH - 1);
 
-                // dB tick labels below the bar
                 const dbRange = maxDb - minDb;
                 const dbStep = 20;
                 const firstTick = Math.ceil(minDb / dbStep) * dbStep;
-                ctx.fillStyle = '#999';
-                ctx.font = fontSize + 'px monospace';
-                ctx.textBaseline = 'top';
+                oCtx.fillStyle = '#999';
+                oCtx.font = fontSize + 'px monospace';
+                oCtx.textBaseline = 'top';
                 const labelY = barY + barH + pad;
 
                 for (let db = firstTick; db <= maxDb; db += dbStep) {
                     const norm = (db - minDb) / dbRange;
                     const x = barLeft + norm * barW;
-                    // Tick mark
-                    ctx.strokeStyle = '#666';
-                    ctx.beginPath();
-                    ctx.moveTo(x + 0.5, barY + barH);
-                    ctx.lineTo(x + 0.5, barY + barH + 3);
-                    ctx.stroke();
-                    // Label
-                    ctx.textAlign = 'center';
-                    ctx.fillText(db + 'dB', x, labelY);
+                    oCtx.strokeStyle = '#666';
+                    oCtx.beginPath();
+                    oCtx.moveTo(x + 0.5, barY + barH);
+                    oCtx.lineTo(x + 0.5, barY + barH + 3);
+                    oCtx.stroke();
+                    oCtx.textAlign = 'center';
+                    oCtx.fillText(db + 'dB', x, labelY);
                 }
             }
+
+            // Render overlay once (it's static)
+            renderOverlay(specWidth, specHeight);
+
+            // Precompute frequency bin index for each pixel row
+            const dataH = specHeight - legendH;
+            const freqMap = new Uint16Array(dataH);
+            for (let row = 0; row < dataH; row++) {
+                freqMap[row] = Math.floor((1 - row / dataH) * maxBin);
+            }
+
+            // Scrolling spectrogram — 30 columns/sec
+            const msPerColumn = 33;
+            let lastColumnTime = performance.now();
 
             function draw(now) {
                 specState.animId = requestAnimationFrame(draw);
@@ -927,27 +891,34 @@
                 const w = canvas.width;
                 const h = canvas.height;
                 const dataW = w - axisW;
-                const dataH = h - legendH;
 
                 // Scroll only the data area
                 const imageData = ctx.getImageData(axisW + columns, legendH, dataW - columns, dataH);
                 ctx.putImageData(imageData, axisW, legendH);
 
+                // Draw new columns using ImageData buffer
+                const colData = ctx.createImageData(columns, dataH);
+                const pixels = colData.data;
+                const baseline = specState.baseline;
+
                 for (let col = 0; col < columns; col++) {
-                    const x = axisW + dataW - columns + col;
-                    for (let y = legendH; y < h; y++) {
-                        const freqIndex = Math.floor((1 - (y - legendH) / dataH) * maxBin);
-                        let value = dataArray[freqIndex] || 0;
-                        if (specState.baseline) {
-                            value = Math.max(0, value - specState.baseline[freqIndex]);
+                    for (let row = 0; row < dataH; row++) {
+                        let value = dataArray[freqMap[row]] || 0;
+                        if (baseline) {
+                            value = Math.max(0, value - baseline[freqMap[row]]);
                         }
-                        const norm = value / 255;
-                        ctx.fillStyle = normToColor(norm);
-                        ctx.fillRect(x, y, 1, 1);
+                        const lutOff = value * 3;
+                        const pxOff = (row * columns + col) * 4;
+                        pixels[pxOff] = colorLUT[lutOff];
+                        pixels[pxOff + 1] = colorLUT[lutOff + 1];
+                        pixels[pxOff + 2] = colorLUT[lutOff + 2];
+                        pixels[pxOff + 3] = 255;
                     }
                 }
+                ctx.putImageData(colData, axisW + dataW - columns, legendH);
 
-                drawOverlays(w, h);
+                // Blit cached overlay
+                ctx.drawImage(overlayCanvas, 0, 0);
             }
 
             specState.animId = requestAnimationFrame(draw);
@@ -958,18 +929,14 @@
         function makeDraggable(el) {
             el.addEventListener('mousedown', (e) => {
                 if (e.button !== 0) return;
-                // Don't drag when clicking handles
                 if (e.target.classList.contains('handle') || e.target.classList.contains('handle-rotate')) return;
                 e.preventDefault();
 
-                const containerRect = container.getBoundingClientRect();
-                const containerScale = containerRect.width / CANVAS_W;
-
+                const containerScale = container.getBoundingClientRect().width / CANVAS_W;
                 let lastX = e.clientX;
                 let lastY = e.clientY;
 
                 const onMove = (e) => {
-                    // Screen deltas converted to canvas space
                     const dx = (e.clientX - lastX) / containerScale;
                     const dy = (e.clientY - lastY) / containerScale;
 
