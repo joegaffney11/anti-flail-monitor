@@ -285,9 +285,8 @@
 
         function updateButtonVisibility() {
             const isSpectrogramSelected = selected && selected.dataset.source === 'spectrogram';
-            const hasBaseline = spectrograms.some(s => s.baseline);
             document.getElementById('btn-zero').style.display = isSpectrogramSelected ? '' : 'none';
-            document.getElementById('btn-reset').style.display = (isSpectrogramSelected && hasBaseline) ? '' : 'none';
+            document.getElementById('btn-reset').style.display = isSpectrogramSelected ? '' : 'none';
             document.getElementById('btn-duplicate').style.display = selected ? '' : 'none';
         }
 
@@ -1009,14 +1008,11 @@
                 const labelY = barY + barH + pad;
 
                 if (specState.baseline) {
-                    // Bidirectional: symmetric labels ±(1.5 × alarm threshold) dB
+                    // Five fixed ticks: scale min, alarm, 0, alarm, scale max
                     const scaledRange = 1.5 * alertThresholdDb;
-                    // Always include endpoints; fill in step ticks between them
-                    const tickSet = new Set([-scaledRange, scaledRange]);
-                    const firstStep = Math.ceil(-scaledRange / dbStep) * dbStep;
-                    for (let db = firstStep; db <= scaledRange; db += dbStep) tickSet.add(db);
-                    const ticks = [...tickSet].sort((a, b) => a - b);
-                    for (const db of ticks) {
+                    const ticks = [-scaledRange, -alertThresholdDb, 0, alertThresholdDb, scaledRange];
+                    for (let i = 0; i < ticks.length; i++) {
+                        const db = ticks[i];
                         const norm = (db + scaledRange) / (2 * scaledRange);
                         const x = barLeft + norm * barW;
                         ctx.strokeStyle = '#666';
@@ -1024,7 +1020,7 @@
                         ctx.moveTo(x + 0.5, barY + barH);
                         ctx.lineTo(x + 0.5, barY + barH + 3);
                         ctx.stroke();
-                        ctx.textAlign = db === -scaledRange ? 'left' : db === scaledRange ? 'right' : 'center';
+                        ctx.textAlign = i === 0 ? 'left' : i === ticks.length - 1 ? 'right' : 'center';
                         const labelVal = Number(db.toFixed(1));
                         ctx.fillText((labelVal > 0 ? '+' : '') + labelVal + 'dB', x, labelY);
                     }
