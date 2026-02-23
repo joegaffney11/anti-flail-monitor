@@ -254,10 +254,10 @@
         <button class="btn-accent" onclick="startCam2()">Webcam 2</button>
         <div class="separator"></div>
         <button onclick="addSpectrogram()">Spectrogram</button>
-        <button onclick="showZeroModal()">Zero</button>
-        <button onclick="resetSpectrogram()">Reset</button>
+        <button id="btn-zero" onclick="showZeroModal()" style="display:none">Zero</button>
+        <button id="btn-reset" onclick="resetSpectrogram()" style="display:none">Reset</button>
         <div class="separator"></div>
-        <button onclick="duplicateSelected()">Duplicate</button>
+        <button id="btn-duplicate" onclick="duplicateSelected()" style="display:none">Duplicate</button>
         <button onclick="document.documentElement.requestFullscreen()">Fullscreen</button>
 
         <div class="control-group" id="video-controls" style="visibility: hidden;">
@@ -282,6 +282,14 @@
         let selected = null;
         let videoCount = 0;
         let spectrograms = [];
+
+        function updateButtonVisibility() {
+            const hasSpectrogram = spectrograms.length > 0;
+            const hasBaseline = spectrograms.some(s => s.baseline);
+            document.getElementById('btn-zero').style.display = hasSpectrogram ? '' : 'none';
+            document.getElementById('btn-reset').style.display = hasBaseline ? '' : 'none';
+            document.getElementById('btn-duplicate').style.display = selected ? '' : 'none';
+        }
 
         // EmailJS configuration (from send_email_emailjs.html)
         const SERVICE_ID  = "service_2zzog1r";
@@ -583,6 +591,7 @@
             }
             if (wrapper._cleanup) wrapper._cleanup();
             wrapper.remove();
+            updateButtonVisibility();
         }
 
         function deleteSelected() {
@@ -667,6 +676,7 @@
             document.getElementById('zoom').value = wrapper.dataset.zoom;
             document.getElementById('rotation').value = Math.round(parseFloat(wrapper.dataset.rotation));
             videoControls.style.visibility = 'visible';
+            updateButtonVisibility();
         }
 
         // Click on empty canvas area deselects
@@ -675,6 +685,7 @@
                 selected.classList.remove('selected');
                 selected = null;
                 videoControls.style.visibility = 'hidden';
+                updateButtonVisibility();
             }
         });
 
@@ -846,12 +857,14 @@
                 s.baseline = new Uint8Array(s.dataArray);
             });
             lastAlertTime = 0;
+            updateButtonVisibility();
         }
 
         function resetSpectrogram() {
             spectrograms.forEach(s => { s.baseline = null; });
             alertEmails = [];
             lastAlertTime = 0;
+            updateButtonVisibility();
         }
 
         async function addSpectrogram() {
@@ -891,6 +904,7 @@
             const dataArray = new Uint8Array(freqBinCount);
             const specState = { analyser, dataArray, baseline: null, animId: null, source };
             spectrograms.push(specState);
+            updateButtonVisibility();
             wrapper._specState = specState;
             wrapper._cleanup = () => {
                 if (specState.animId) cancelAnimationFrame(specState.animId);
@@ -995,10 +1009,11 @@
                 const labelY = barY + barH + pad;
 
                 if (specState.baseline) {
-                    // Bidirectional: symmetric labels around 0 dB delta (cyan=decrease, red=increase)
-                    const firstTick = Math.ceil(-dbRange / dbStep) * dbStep;
-                    for (let db = firstTick; db <= dbRange; db += dbStep) {
-                        const norm = (db + dbRange) / (2 * dbRange);
+                    // Bidirectional: symmetric labels ±(1.5 × alarm threshold) dB
+                    const scaledRange = 1.5 * alertThresholdDb;
+                    const firstTick = Math.ceil(-scaledRange / dbStep) * dbStep;
+                    for (let db = firstTick; db <= scaledRange; db += dbStep) {
+                        const norm = (db + scaledRange) / (2 * scaledRange);
                         const x = barLeft + norm * barW;
                         ctx.strokeStyle = '#666';
                         ctx.beginPath();
@@ -1061,6 +1076,9 @@
                 const imageData = ctx.getImageData(axisW + columns, legendH, dataW - columns, dataH);
                 ctx.putImageData(imageData, axisW, legendH);
 
+                const dbPerUnit = (analyser.maxDecibels - analyser.minDecibels) / 255;
+                const scaledRangeBytes = (1.5 * alertThresholdDb) / dbPerUnit;
+
                 for (let col = 0; col < columns; col++) {
                     const x = axisW + dataW - columns + col;
                     for (let y = legendH; y < h; y++) {
@@ -1070,7 +1088,8 @@
                         if (specState.baseline) {
                             // Signed delta: negative = quieter, positive = louder than baseline
                             const signedDelta = raw - specState.baseline[freqIndex];
-                            color = normToColorBidirectional((signedDelta + 255) / 510);
+                            const clampedDelta = Math.max(-scaledRangeBytes, Math.min(scaledRangeBytes, signedDelta));
+                            color = normToColorBidirectional((clampedDelta + scaledRangeBytes) / (2 * scaledRangeBytes));
                         } else {
                             color = normToColor(raw / 255);
                         }
