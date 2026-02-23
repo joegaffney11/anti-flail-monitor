@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webcam Mixer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -226,12 +227,34 @@
     </style>
 </head>
 <body>
+    <!-- Zero spectrogram modal -->
+    <div id="zero-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:1000; align-items:center; justify-content:center;">
+        <div style="background:#16213e; border:1px solid #0f3460; border-radius:8px; padding:24px; width:460px; max-width:90vw; font-family:'Segoe UI',system-ui,sans-serif;">
+            <h3 style="margin:0 0 10px; color:#e0e0e0; font-size:15px;">Zero Spectrogram</h3>
+            <p style="margin:0 0 12px; color:#8899aa; font-size:13px;">Enter email addresses (comma-separated) to receive an alert if audio changes by the threshold below from this reference level. Leave blank to zero without alerts.</p>
+            <input type="text" id="zero-emails" placeholder="email@example.com, another@example.com"
+                style="width:100%; box-sizing:border-box; background:#0a1628; color:#e0e0e0; border:1px solid #1a4a8a; border-radius:4px; padding:8px 10px; font-size:13px; font-family:inherit; margin-bottom:10px;"
+                onkeydown="if(event.key==='Enter') confirmZero()">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
+                <label style="color:#8899aa; font-size:13px; white-space:nowrap;">Alert threshold:</label>
+                <input type="number" id="zero-threshold" value="20" min="1" max="100" step="1"
+                    style="width:64px; background:#0a1628; color:#e0e0e0; border:1px solid #1a4a8a; border-radius:4px; padding:5px 8px; font-size:13px; font-family:inherit;"
+                    onkeydown="if(event.key==='Enter') confirmZero()">
+                <span style="color:#8899aa; font-size:13px;">dB</span>
+            </div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                <button onclick="cancelZeroModal()" style="padding:7px 16px; background:#1a1a2e; border:1px solid #333; border-radius:6px; color:#e0e0e0; font-family:inherit; cursor:pointer; font-size:13px;">Cancel</button>
+                <button onclick="confirmZero()" style="padding:7px 16px; background:#1b8a5a; border:1px solid #24b474; border-radius:6px; color:#e0e0e0; font-family:inherit; cursor:pointer; font-size:13px;">Set Zero</button>
+            </div>
+        </div>
+    </div>
+
     <div id="controls">
         <button class="btn-accent" onclick="startCam1()">Webcam 1</button>
         <button class="btn-accent" onclick="startCam2()">Webcam 2</button>
         <div class="separator"></div>
         <button onclick="addSpectrogram()">Spectrogram</button>
-        <button onclick="zeroSpectrogram()">Zero</button>
+        <button onclick="showZeroModal()">Zero</button>
         <button onclick="resetSpectrogram()">Reset</button>
         <div class="separator"></div>
         <button onclick="duplicateSelected()">Duplicate</button>
@@ -259,6 +282,16 @@
         let selected = null;
         let videoCount = 0;
         let spectrograms = [];
+
+        // EmailJS configuration (from send_email_emailjs.html)
+        const SERVICE_ID  = "service_2zzog1r";
+        const TEMPLATE_ID = "template_2fhjt5g";
+        const PUBLIC_KEY  = "a06wMQ_bIo6by6fvA";
+        emailjs.init({ publicKey: PUBLIC_KEY });
+
+        let alertEmails = [];         // addresses to notify on threshold dB change
+        let alertThresholdDb = 20;    // dB change required to trigger an alert
+        let lastAlertTime = 0;        // ms timestamp of last sent alert (30 s cooldown)
 
         // Canvas matches screen resolution so fullscreen is pixel-perfect
         const CANVAS_W = screen.width;
@@ -776,15 +809,49 @@
 
         // --- Spectrogram ---
 
-        function zeroSpectrogram() {
+        // --- Email alert ---
+
+        function sendAlertEmail(emails, deltaDb) {
+            const direction = deltaDb > 0 ? 'increase' : 'decrease';
+            const absDb = Math.abs(deltaDb).toFixed(1);
+            const sign = deltaDb > 0 ? '+' : '';
+            const subject = `Audio Alert: ${absDb} dB ${direction} detected`;
+            const message = `A significant audio level change was detected from the reference point.\n\nChange: ${sign}${deltaDb.toFixed(1)} dB\nTime: ${new Date().toLocaleString()}`;
+            emails.forEach(email => {
+                emailjs.send(SERVICE_ID, TEMPLATE_ID, { to_email: email, subject, message })
+                    .catch(err => console.error('EmailJS error:', err));
+            });
+        }
+
+        // --- Zero modal ---
+
+        function showZeroModal() {
+            document.getElementById('zero-emails').value = alertEmails.join(', ');
+            document.getElementById('zero-threshold').value = alertThresholdDb;
+            document.getElementById('zero-modal').style.display = 'flex';
+            setTimeout(() => document.getElementById('zero-emails').focus(), 50);
+        }
+
+        function cancelZeroModal() {
+            document.getElementById('zero-modal').style.display = 'none';
+        }
+
+        function confirmZero() {
+            const raw = document.getElementById('zero-emails').value.trim();
+            alertEmails = raw ? raw.split(',').map(e => e.trim()).filter(e => e) : [];
+            alertThresholdDb = Math.max(1, parseFloat(document.getElementById('zero-threshold').value) || 20);
+            document.getElementById('zero-modal').style.display = 'none';
             spectrograms.forEach(s => {
                 s.analyser.getByteFrequencyData(s.dataArray);
                 s.baseline = new Uint8Array(s.dataArray);
             });
+            lastAlertTime = 0;
         }
 
         function resetSpectrogram() {
             spectrograms.forEach(s => { s.baseline = null; });
+            alertEmails = [];
+            lastAlertTime = 0;
         }
 
         async function addSpectrogram() {
@@ -858,6 +925,21 @@
                 return `rgb(${r},${g},${b})`;
             }
 
+            // Bidirectional color: 0 = large decrease (cyan), 0.5 = no change (black), 1 = large increase (white/red)
+            function normToColorBidirectional(norm) {
+                if (norm < 0.5) {
+                    // Decrease side: 0.5→black, 0→cyan
+                    const t = (0.5 - norm) * 2;
+                    if (t < 0.5) return `rgb(0,0,${Math.floor(t * 2 * 255)})`;
+                    return `rgb(0,${Math.floor((t - 0.5) * 2 * 255)},255)`;
+                }
+                // Increase side: 0.5→black, 1→white (red→yellow→white)
+                const t = (norm - 0.5) * 2;
+                if (t < 0.33) return `rgb(${Math.floor(t * 3 * 255)},0,0)`;
+                if (t < 0.67) return `rgb(255,${Math.floor((t - 0.33) * 3 * 255)},0)`;
+                return `rgb(255,255,${Math.floor((t - 0.67) * 3 * 255)})`;
+            }
+
             function drawOverlays(w, h) {
                 const dataH = h - legendH;
                 const minDb = analyser.minDecibels;
@@ -898,7 +980,7 @@
                 const barH = 10;
                 for (let px = 0; px < barW; px++) {
                     const norm = px / barW;
-                    ctx.fillStyle = normToColor(norm);
+                    ctx.fillStyle = specState.baseline ? normToColorBidirectional(norm) : normToColor(norm);
                     ctx.fillRect(barLeft + px, barY, 1, barH);
                 }
                 ctx.strokeStyle = '#666';
@@ -907,24 +989,38 @@
                 // dB tick labels below the bar
                 const dbRange = maxDb - minDb;
                 const dbStep = 20;
-                const firstTick = Math.ceil(minDb / dbStep) * dbStep;
                 ctx.fillStyle = '#999';
                 ctx.font = fontSize + 'px monospace';
                 ctx.textBaseline = 'top';
                 const labelY = barY + barH + pad;
 
-                for (let db = firstTick; db <= maxDb; db += dbStep) {
-                    const norm = (db - minDb) / dbRange;
-                    const x = barLeft + norm * barW;
-                    // Tick mark
-                    ctx.strokeStyle = '#666';
-                    ctx.beginPath();
-                    ctx.moveTo(x + 0.5, barY + barH);
-                    ctx.lineTo(x + 0.5, barY + barH + 3);
-                    ctx.stroke();
-                    // Label
-                    ctx.textAlign = 'center';
-                    ctx.fillText(db + 'dB', x, labelY);
+                if (specState.baseline) {
+                    // Bidirectional: symmetric labels around 0 dB delta (cyan=decrease, red=increase)
+                    const firstTick = Math.ceil(-dbRange / dbStep) * dbStep;
+                    for (let db = firstTick; db <= dbRange; db += dbStep) {
+                        const norm = (db + dbRange) / (2 * dbRange);
+                        const x = barLeft + norm * barW;
+                        ctx.strokeStyle = '#666';
+                        ctx.beginPath();
+                        ctx.moveTo(x + 0.5, barY + barH);
+                        ctx.lineTo(x + 0.5, barY + barH + 3);
+                        ctx.stroke();
+                        ctx.textAlign = 'center';
+                        ctx.fillText((db > 0 ? '+' : '') + db + 'dB', x, labelY);
+                    }
+                } else {
+                    const firstTick = Math.ceil(minDb / dbStep) * dbStep;
+                    for (let db = firstTick; db <= maxDb; db += dbStep) {
+                        const norm = (db - minDb) / dbRange;
+                        const x = barLeft + norm * barW;
+                        ctx.strokeStyle = '#666';
+                        ctx.beginPath();
+                        ctx.moveTo(x + 0.5, barY + barH);
+                        ctx.lineTo(x + 0.5, barY + barH + 3);
+                        ctx.stroke();
+                        ctx.textAlign = 'center';
+                        ctx.fillText(db + 'dB', x, labelY);
+                    }
                 }
             }
 
@@ -939,6 +1035,23 @@
 
                 analyser.getByteFrequencyData(dataArray);
 
+                // 20 dB alert: check for significant deviation from baseline
+                if (specState.baseline && alertEmails.length > 0) {
+                    const now = performance.now();
+                    if (now - lastAlertTime > 30000) { // 30-second cooldown between emails
+                        const dbPerUnit = (analyser.maxDecibels - analyser.minDecibels) / 255;
+                        let maxAbsDelta = 0, peakSignedDelta = 0;
+                        for (let i = 0; i < maxBin; i++) {
+                            const d = (dataArray[i] || 0) - specState.baseline[i];
+                            if (Math.abs(d) > maxAbsDelta) { maxAbsDelta = Math.abs(d); peakSignedDelta = d; }
+                        }
+                        if (maxAbsDelta * dbPerUnit >= alertThresholdDb) {
+                            lastAlertTime = now;
+                            sendAlertEmail(alertEmails, peakSignedDelta * dbPerUnit);
+                        }
+                    }
+                }
+
                 const w = canvas.width;
                 const h = canvas.height;
                 const dataW = w - axisW;
@@ -952,12 +1065,16 @@
                     const x = axisW + dataW - columns + col;
                     for (let y = legendH; y < h; y++) {
                         const freqIndex = Math.floor((1 - (y - legendH) / dataH) * maxBin);
-                        let value = dataArray[freqIndex] || 0;
+                        const raw = dataArray[freqIndex] || 0;
+                        let color;
                         if (specState.baseline) {
-                            value = Math.max(0, value - specState.baseline[freqIndex]);
+                            // Signed delta: negative = quieter, positive = louder than baseline
+                            const signedDelta = raw - specState.baseline[freqIndex];
+                            color = normToColorBidirectional((signedDelta + 255) / 510);
+                        } else {
+                            color = normToColor(raw / 255);
                         }
-                        const norm = value / 255;
-                        ctx.fillStyle = normToColor(norm);
+                        ctx.fillStyle = color;
                         ctx.fillRect(x, y, 1, 1);
                     }
                 }
