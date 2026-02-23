@@ -284,10 +284,10 @@
         let spectrograms = [];
 
         function updateButtonVisibility() {
-            const hasSpectrogram = spectrograms.length > 0;
+            const isSpectrogramSelected = selected && selected.dataset.source === 'spectrogram';
             const hasBaseline = spectrograms.some(s => s.baseline);
-            document.getElementById('btn-zero').style.display = hasSpectrogram ? '' : 'none';
-            document.getElementById('btn-reset').style.display = hasBaseline ? '' : 'none';
+            document.getElementById('btn-zero').style.display = isSpectrogramSelected ? '' : 'none';
+            document.getElementById('btn-reset').style.display = (isSpectrogramSelected && hasBaseline) ? '' : 'none';
             document.getElementById('btn-duplicate').style.display = selected ? '' : 'none';
         }
 
@@ -1011,8 +1011,12 @@
                 if (specState.baseline) {
                     // Bidirectional: symmetric labels ±(1.5 × alarm threshold) dB
                     const scaledRange = 1.5 * alertThresholdDb;
-                    const firstTick = Math.ceil(-scaledRange / dbStep) * dbStep;
-                    for (let db = firstTick; db <= scaledRange; db += dbStep) {
+                    // Always include endpoints; fill in step ticks between them
+                    const tickSet = new Set([-scaledRange, scaledRange]);
+                    const firstStep = Math.ceil(-scaledRange / dbStep) * dbStep;
+                    for (let db = firstStep; db <= scaledRange; db += dbStep) tickSet.add(db);
+                    const ticks = [...tickSet].sort((a, b) => a - b);
+                    for (const db of ticks) {
                         const norm = (db + scaledRange) / (2 * scaledRange);
                         const x = barLeft + norm * barW;
                         ctx.strokeStyle = '#666';
@@ -1020,8 +1024,9 @@
                         ctx.moveTo(x + 0.5, barY + barH);
                         ctx.lineTo(x + 0.5, barY + barH + 3);
                         ctx.stroke();
-                        ctx.textAlign = 'center';
-                        ctx.fillText((db > 0 ? '+' : '') + db + 'dB', x, labelY);
+                        ctx.textAlign = db === -scaledRange ? 'left' : db === scaledRange ? 'right' : 'center';
+                        const labelVal = Number(db.toFixed(1));
+                        ctx.fillText((labelVal > 0 ? '+' : '') + labelVal + 'dB', x, labelY);
                     }
                 } else {
                     const firstTick = Math.ceil(minDb / dbStep) * dbStep;
