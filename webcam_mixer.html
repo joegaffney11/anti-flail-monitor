@@ -190,6 +190,13 @@
             display: block;
         }
 
+        .motion-overlay {
+            top: 0;
+            left: 0;
+            opacity: 0.6;
+            image-rendering: pixelated;
+        }
+
         /* Fullscreen */
         :fullscreen,
         :-webkit-full-screen {
@@ -227,6 +234,35 @@
     </style>
 </head>
 <body>
+    <!-- Motion detection modal -->
+    <div id="motion-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:1000; align-items:center; justify-content:center;">
+        <div style="background:#16213e; border:1px solid #0f3460; border-radius:8px; padding:24px; width:460px; max-width:90vw; font-family:'Segoe UI',system-ui,sans-serif;">
+            <h3 style="margin:0 0 10px; color:#e0e0e0; font-size:15px;">Motion Detection</h3>
+            <p style="margin:0 0 12px; color:#8899aa; font-size:13px;">Enter email addresses (comma-separated) to receive an alert when motion exceeds the threshold. Leave blank to show the overlay without alerts.</p>
+            <input type="text" id="motion-emails" placeholder="email@example.com, another@example.com"
+                style="width:100%; box-sizing:border-box; background:#0a1628; color:#e0e0e0; border:1px solid #1a4a8a; border-radius:4px; padding:8px 10px; font-size:13px; font-family:inherit; margin-bottom:10px;"
+                onkeydown="if(event.key==='Enter') confirmMotion()">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                <label style="color:#8899aa; font-size:13px; white-space:nowrap;">Alert when motion exceeds:</label>
+                <input type="number" id="motion-threshold" value="5" min="0.1" max="100" step="0.5"
+                    style="width:64px; background:#0a1628; color:#e0e0e0; border:1px solid #1a4a8a; border-radius:4px; padding:5px 8px; font-size:13px; font-family:inherit;"
+                    onkeydown="if(event.key==='Enter') confirmMotion()">
+                <span style="color:#8899aa; font-size:13px;">% pixels changed</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
+                <label style="color:#8899aa; font-size:13px; white-space:nowrap;">Pixel sensitivity:</label>
+                <input type="number" id="motion-pixel-threshold" value="30" min="1" max="255" step="1"
+                    style="width:64px; background:#0a1628; color:#e0e0e0; border:1px solid #1a4a8a; border-radius:4px; padding:5px 8px; font-size:13px; font-family:inherit;"
+                    onkeydown="if(event.key==='Enter') confirmMotion()">
+                <span style="color:#8899aa; font-size:13px;">/255 (lower = more sensitive)</span>
+            </div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                <button onclick="cancelMotionModal()" style="padding:7px 16px; background:#1a1a2e; border:1px solid #333; border-radius:6px; color:#e0e0e0; font-family:inherit; cursor:pointer; font-size:13px;">Cancel</button>
+                <button onclick="confirmMotion()" style="padding:7px 16px; background:#1b8a5a; border:1px solid #24b474; border-radius:6px; color:#e0e0e0; font-family:inherit; cursor:pointer; font-size:13px;">Enable</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Zero spectrogram modal -->
     <div id="zero-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:1000; align-items:center; justify-content:center;">
         <div style="background:#16213e; border:1px solid #0f3460; border-radius:8px; padding:24px; width:460px; max-width:90vw; font-family:'Segoe UI',system-ui,sans-serif;">
@@ -256,6 +292,8 @@
         <button onclick="addSpectrogram()">Spectrogram</button>
         <button id="btn-zero" onclick="showZeroModal()" style="display:none">Zero</button>
         <button id="btn-reset" onclick="resetSpectrogram()" style="display:none">Reset</button>
+        <button id="btn-motion" onclick="showMotionModal()" style="display:none">Motion</button>
+        <button id="btn-motion-reset" onclick="resetMotion()" style="display:none">Reset</button>
         <div class="separator"></div>
         <button id="btn-duplicate" onclick="duplicateSelected()" style="display:none">Duplicate</button>
         <button onclick="document.documentElement.requestFullscreen()">Fullscreen</button>
@@ -287,6 +325,9 @@
             const isSpectrogramSelected = selected && selected.dataset.source === 'spectrogram';
             document.getElementById('btn-zero').style.display = isSpectrogramSelected ? '' : 'none';
             document.getElementById('btn-reset').style.display = isSpectrogramSelected ? '' : 'none';
+            const isCamSelected = selected && (selected.dataset.source === 'cam1' || selected.dataset.source === 'cam2');
+            document.getElementById('btn-motion').style.display = isCamSelected ? '' : 'none';
+            document.getElementById('btn-motion-reset').style.display = (isCamSelected && selected._motionState?.enabled) ? '' : 'none';
             document.getElementById('btn-duplicate').style.display = selected ? '' : 'none';
         }
 
@@ -477,6 +518,11 @@
                     }
                 }
 
+                if (wrapper._motionState?.overlayCanvas) {
+                    wrapper._motionState.overlayCanvas.style.width = newW + 'px';
+                    wrapper._motionState.overlayCanvas.style.height = newH + 'px';
+                }
+
                 updateWrapperPosition(wrapper);
             };
 
@@ -632,6 +678,22 @@
             video.playsInline = true;
             innerClip.appendChild(video);
 
+            const motionState = {
+                enabled: false,
+                alertEmails: [],
+                motionThreshold: 5,
+                pixelThreshold: 30,
+                prevFrame: null,
+                animId: null,
+                lastAlertTime: 0,
+                lastProcessTime: 0,
+                offCanvas: null,
+                offCtx: null,
+                overlayCanvas: null,
+                overlayCtx: null,
+            };
+            wrapper._motionState = motionState;
+
             video.addEventListener('loadedmetadata', () => {
                 const nw = video.videoWidth;
                 const nh = video.videoHeight;
@@ -650,6 +712,69 @@
                 wrapper.dataset.cx = left + w / 2;
                 wrapper.dataset.cy = top + h / 2;
                 updateWrapperPosition(wrapper);
+
+                // Motion detection setup — sample at 1/4 scale for performance
+                const MOTION_W = Math.max(80, Math.round(w / 4));
+                const MOTION_H = Math.max(60, Math.round(h / 4));
+
+                motionState.offCanvas = document.createElement('canvas');
+                motionState.offCanvas.width = MOTION_W;
+                motionState.offCanvas.height = MOTION_H;
+                motionState.offCtx = motionState.offCanvas.getContext('2d', { willReadFrequently: true });
+
+                const overlayCanvas = document.createElement('canvas');
+                overlayCanvas.width = MOTION_W;
+                overlayCanvas.height = MOTION_H;
+                overlayCanvas.className = 'motion-overlay';
+                overlayCanvas.style.width = w + 'px';
+                overlayCanvas.style.height = h + 'px';
+                innerClip.appendChild(overlayCanvas);
+                motionState.overlayCanvas = overlayCanvas;
+                motionState.overlayCtx = overlayCanvas.getContext('2d');
+
+                const motionLoop = (now) => {
+                    motionState.animId = requestAnimationFrame(motionLoop);
+                    if (now - motionState.lastProcessTime < 100) return; // ~10 fps
+                    motionState.lastProcessTime = now;
+                    if (video.readyState < 2) return;
+
+                    motionState.offCtx.drawImage(video, 0, 0, MOTION_W, MOTION_H);
+                    let currentData;
+                    try {
+                        currentData = motionState.offCtx.getImageData(0, 0, MOTION_W, MOTION_H);
+                    } catch (e) { motionState.prevFrame = null; return; }
+
+                    if (motionState.prevFrame && motionState.enabled) {
+                        const overlayData = motionState.overlayCtx.createImageData(MOTION_W, MOTION_H);
+                        let changedPixels = 0;
+                        const total = MOTION_W * MOTION_H;
+                        for (let i = 0; i < total; i++) {
+                            const p = i * 4;
+                            const dr = Math.abs(currentData.data[p]   - motionState.prevFrame.data[p]);
+                            const dg = Math.abs(currentData.data[p+1] - motionState.prevFrame.data[p+1]);
+                            const db = Math.abs(currentData.data[p+2] - motionState.prevFrame.data[p+2]);
+                            if ((dr + dg + db) / 3 > motionState.pixelThreshold) {
+                                changedPixels++;
+                                overlayData.data[p]   = 255;
+                                overlayData.data[p+1] = 80;
+                                overlayData.data[p+2] = 0;
+                                overlayData.data[p+3] = 180;
+                            }
+                        }
+                        motionState.overlayCtx.putImageData(overlayData, 0, 0);
+
+                        const motionScore = (changedPixels / total) * 100;
+                        if (motionState.alertEmails.length > 0 && now - motionState.lastAlertTime > 30000) {
+                            if (motionScore >= motionState.motionThreshold) {
+                                motionState.lastAlertTime = now;
+                                sendMotionAlertEmail(motionState.alertEmails, motionScore);
+                            }
+                        }
+                    }
+
+                    motionState.prevFrame = currentData;
+                };
+                motionState.animId = requestAnimationFrame(motionLoop);
             });
 
             // Set initial position before metadata loads
@@ -659,7 +784,10 @@
             wrapper.dataset.cy = initTop + 240;
             updateWrapperPosition(wrapper);
 
-            wrapper._cleanup = () => { video.srcObject = null; };
+            wrapper._cleanup = () => {
+                video.srcObject = null;
+                if (motionState.animId) cancelAnimationFrame(motionState.animId);
+            };
             setupWrapper(wrapper);
         }
 
@@ -715,11 +843,12 @@
             const panX = parseFloat(wrapper.dataset.panX);
             const panY = parseFloat(wrapper.dataset.panY);
             const zoom = parseFloat(wrapper.dataset.zoom) / 100;
+            const t = `translate(${panX}px, ${panY}px) scale(${zoom})`;
 
-            // Only pan/zoom on inner element — rotation is on wrapper
-            const el = wrapper.querySelector('video') || wrapper.querySelector('canvas');
-            if (el) {
-                el.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+            // Apply pan/zoom to all video/canvas in inner-clip — rotation is on wrapper
+            const innerClip = wrapper.querySelector('.inner-clip');
+            if (innerClip) {
+                innerClip.querySelectorAll('video, canvas').forEach(el => { el.style.transform = t; });
             }
 
             if (wrapper === selected) {
@@ -1103,6 +1232,60 @@
             }
 
             specState.animId = requestAnimationFrame(draw);
+        }
+
+        // --- Motion detection ---
+
+        let motionModalWrapper = null;
+
+        function showMotionModal() {
+            if (!selected || !selected._motionState) return;
+            motionModalWrapper = selected;
+            const ms = motionModalWrapper._motionState;
+            document.getElementById('motion-emails').value = ms.alertEmails.join(', ');
+            document.getElementById('motion-threshold').value = ms.motionThreshold;
+            document.getElementById('motion-pixel-threshold').value = ms.pixelThreshold;
+            document.getElementById('motion-modal').style.display = 'flex';
+            setTimeout(() => document.getElementById('motion-emails').focus(), 50);
+        }
+
+        function cancelMotionModal() {
+            document.getElementById('motion-modal').style.display = 'none';
+        }
+
+        function confirmMotion() {
+            if (!motionModalWrapper || !motionModalWrapper._motionState) return;
+            const ms = motionModalWrapper._motionState;
+            const raw = document.getElementById('motion-emails').value.trim();
+            ms.alertEmails = raw ? raw.split(',').map(e => e.trim()).filter(e => e) : [];
+            ms.motionThreshold = Math.max(0.1, parseFloat(document.getElementById('motion-threshold').value) || 5);
+            ms.pixelThreshold = Math.max(1, Math.min(255, parseInt(document.getElementById('motion-pixel-threshold').value) || 30));
+            ms.enabled = true;
+            ms.lastAlertTime = 0;
+            document.getElementById('motion-modal').style.display = 'none';
+            updateButtonVisibility();
+        }
+
+        function resetMotion() {
+            if (!selected || !selected._motionState) return;
+            const ms = selected._motionState;
+            ms.enabled = false;
+            ms.alertEmails = [];
+            ms.lastAlertTime = 0;
+            ms.prevFrame = null;
+            if (ms.overlayCtx && ms.overlayCanvas) {
+                ms.overlayCtx.clearRect(0, 0, ms.overlayCanvas.width, ms.overlayCanvas.height);
+            }
+            updateButtonVisibility();
+        }
+
+        function sendMotionAlertEmail(emails, motionScore) {
+            const subject = `Motion Alert: ${motionScore.toFixed(1)}% motion detected`;
+            const message = `Significant motion was detected by the webcam monitor.\n\nMotion level: ${motionScore.toFixed(1)}%\nTime: ${new Date().toLocaleString()}`;
+            emails.forEach(email => {
+                emailjs.send(SERVICE_ID, TEMPLATE_ID, { to_email: email, subject, message })
+                    .catch(err => console.error('EmailJS error:', err));
+            });
         }
 
         // --- Drag ---
